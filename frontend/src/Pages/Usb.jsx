@@ -1,0 +1,710 @@
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { Printer, ArrowLeft, X } from "lucide-react";
+import { ezlogo } from "../assets/Icons";
+import MiniNav from "../components/MiniNav";
+
+import CustomPage from "../components/bluetooth/customized_page";
+import DocumentPreview from "../components/bluetooth/document_preview";
+import SmartPriceToggle from "../components/bluetooth/smart_price";
+import PrintPreview from "../components/PrintPreview";
+
+import { realtimeDb, storage } from "../../firebase/firebase_config";
+import { ref as dbRef, push, get, update, set } from "firebase/database";
+import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { onValue } from "firebase/database";
+import axios from "axios";
+import { PDFDocument } from "pdf-lib";
+import mammoth from "mammoth";
+
+import { getPageIndicesToPrint } from "../utils/pageRanges";
+
+// Let's update the GroupDocs viewer URL function to ensure we get a proper view
+const getGroupDocsViewerUrl = (fileUrl) => {
+  // Encode the file URL to be used as a parameter
+  const encodedFileUrl = encodeURIComponent(fileUrl);
+  
+  // Return a direct URL to the GroupDocs viewer
+  return `https://products.groupdocs.app/viewer/view?file=${encodedFileUrl}`;
+};
+
+// Let's add a direct function to open the document in GroupDocs with a more reliable approach
+const openInGroupDocs = (fileUrl) => {
+  const encodedFileUrl = encodeURIComponent(fileUrl);
+  const groupDocsUrl = `https://products.groupdocs.app/viewer/view?file=${encodedFileUrl}`;
+  
+  // Open GroupDocs in a new tab
+  window.open(groupDocsUrl, '_blank');
+};
+
+const Usb = () => {
+  const navigate = useNavigate();
+
+  const [filePreviewUrl, setFilePreviewUrl] = useState("");
+  const [fileToUpload, setFileToUpload] = useState(null);
+  const [copies, setCopies] = useState(1);
+  const [selectedSize, setSelectedSize] = useState("Letter 8.5 x 11");
+  const [isColor, setIsColor] = useState(false);
+  const [orientation, setOrientation] = useState("portrait");
+  const [selectedPageOption, setSelectedPageOption] = useState("All");
+  const [customPageRange, setCustomPageRange] = useState("");
+  const [totalPages, setTotalPages] = useState(1);
+  const [isSmartPriceEnabled, setIsSmartPriceEnabled] = useState(false);
+  const [calculatedPrice, setCalculatedPrice] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [availableCoins, setAvailableCoins] = useState(0);
+  const [showPrintPreview, setShowPrintPreview] = useState(false);
+
+  // Guide modal state
+  const [showModal, setShowModal] = useState(false);
+
+  // Add a state variable to track if we're using an external viewer
+  const [useExternalViewer, setUseExternalViewer] = useState(false);
+  const [externalViewerUrl, setExternalViewerUrl] = useState("");
+
+  useEffect(() => {
+    setShowModal(true);
+  }, []);
+
+  const closeModal = () => {
+    setShowModal(false);
+  };
+
+  useEffect(() => {
+    const coinRef = dbRef(realtimeDb, "coinCount/availableCoins");
+    
+    // Listen for real-time updates
+    const unsubscribe = onValue(coinRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setAvailableCoins(snapshot.val());
+      } else {
+        console.error("Error retrieving available coins.");
+      }
+    }, (error) => {
+      console.error("Error fetching available coins:", error);
+    });
+  
+    return () => unsubscribe();
+  }, []);
+
+  const handleFileSelect = (event) => {
+    const file = event.target.files[0];
+    if (!file) {
+      alert("No file selected!");
+      return;
+    }
+    setFileToUpload(file);
+
+    // If PDF, get total pages
+    if (file.type === "application/pdf") {
+      const reader = new FileReader();  
+      reader.onload = async (e) => {
+        const pdfData = new Uint8Array(e.target.result);
+        const pdfDoc = await PDFDocument.load(pdfData);
+        const totalPageCount = pdfDoc.getPageCount();
+        setTotalPages(totalPageCount);
+      };
+      reader.readAsArrayBuffer(file);
+    }
+    else if (
+      file.type ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ) {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const arrayBuffer = e.target.result;
+        try {
+          const result = await mammoth.extractRawText({ arrayBuffer });
+          const textLength = result.value.length;
+          const estimatedPages = Math.ceil(textLength / 1000);
+          setTotalPages(estimatedPages);
+        } catch (error) {
+          console.error("Error reading docx file:", error);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      setTotalPages(1);
+    }
+
+    uploadFileToFirebase(file);
+  };
+
+  const uploadFileToFirebase = async (file) => {
+    if (!file) {
+      return;
+    }
+    
+    // Create a unique filename to avoid collisions
+    const timestamp = new Date().getTime();
+    const uniqueFileName = `${timestamp}_${file.name}`;
+    const storageRef = ref(storage, `uploads/${uniqueFileName}`);
+    
+    // Set metadata to ensure files are publicly readable
+    const metadata = {
+      contentType: file.type,
+      customMetadata: {
+        'public': 'true'
+      }
+    };
+    
+    const uploadTask = uploadBytesResumable(storageRef, file, metadata);
+
+    uploadTask.on(
+      "state_changed",
+      (snapshot) => {
+        // Handle progress if needed
+        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+        console.log('Upload progress:', progress);
+      },
+      (error) => {
+        console.error("Upload failed:", error);
+        setFilePreviewUrl("");
+        setFileToUpload(null);
+      },
+      async () => {
+        try {
+          const url = await getDownloadURL(uploadTask.snapshot.ref);
+          setFilePreviewUrl(url);
+          
+          // Push file details to Firebase Realtime Database
+          const fileRef = push(dbRef(realtimeDb, "uploadedFiles"));
+          await set(fileRef, {
+            fileName: file.name,
+            fileUrl: url,
+            totalPages,
+            uploadedAt: new Date().toISOString(),
+          });
+
+        } catch (error) {
+          console.error("Error getting download URL:", error);
+          setFilePreviewUrl("");
+          setFileToUpload(null);
+        }
+      }
+    );
+  };
+
+  // Add a function to render DOCX as HTML using mammoth.js
+  const renderDocxAsHtml = async () => {
+    if (!fileToUpload || 
+        !(fileToUpload.name.toLowerCase().endsWith('.docx') || 
+          fileToUpload.name.toLowerCase().endsWith('.doc'))) {
+      alert("Please upload a valid Word document.");
+      return;
+    }
+    
+     setIsLoading(true);
+    
+    try {
+      // Read the file as an ArrayBuffer
+      const arrayBuffer = await fileToUpload.arrayBuffer();
+      
+      // Use mammoth to convert to HTML
+      const result = await mammoth.convertToHtml({ arrayBuffer });
+      const htmlContent = result.value;
+      
+      // Open a new window with the HTML content
+      const printWindow = window.open('', '_blank', 'width=800,height=600');
+      
+      if (!printWindow) {
+        alert("Please allow pop-ups to open the preview.");
+       setIsLoading(false);
+       return;
+     }
+      
+      // Write the HTML content to the window
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>VendoPrint - ${fileToUpload?.name || 'Document'}</title>
+            <style>
+              body {
+                margin: 0;
+                padding: 20px;
+                font-family: Arial, sans-serif;
+              }
+              .container {
+                max-width: 800px;
+                margin: 0 auto;
+              }
+              .header {
+                text-align: center;
+                padding: 20px;
+                background-color: #f8f9fa;
+                border-bottom: 1px solid #e9ecef;
+                margin-bottom: 20px;
+              }
+              .content {
+                background-color: white;
+                padding: 20px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+              }
+              button {
+                padding: 10px 20px;
+                background-color: #31304D;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                margin-top: 10px;
+              }
+              @media print {
+                .no-print {
+                  display: none;
+                }
+                body {
+                  padding: 0;
+                }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header no-print">
+                <h2>${fileToUpload?.name || 'Document'}</h2>
+                <p>This is a preview of your document. Some formatting might differ from the original file.</p>
+                <button onclick="window.print()">Print Document</button>
+              </div>
+              <div class="content">
+                ${htmlContent}
+              </div>
+            </div>
+          </body>
+        </html>
+      `);
+      
+      printWindow.document.close();
+      
+    } catch (error) {
+      console.error("Error rendering document:", error);
+      alert("Error rendering the document. Please try another option.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Update the handlePrint function to go directly to browser print dialog
+  const handlePrint = async () => {
+    setIsLoading(true);
+    
+    if (!fileToUpload) {
+      alert("No file selected! Please upload a file before printing.");
+      setIsLoading(false);
+      return;
+    }
+
+    // Check if user has enough coins
+    const coinRef = dbRef(realtimeDb, "coinCount");
+    try {
+      const snapshot = await get(coinRef);
+      if (snapshot.exists()) {
+        const coins = snapshot.val().availableCoins;
+        setAvailableCoins(coins);
+        if (coins < calculatedPrice) {
+          alert("Not enough coins to proceed with printing.");
+          setIsLoading(false);
+          return;
+        }
+      } else {
+        alert("Error retrieving available coins.");
+        setIsLoading(false);
+        return;
+      }
+    } catch (error) {
+      console.error("Error fetching available coins:", error);
+      alert("Error fetching available coins.");
+      setIsLoading(false);
+      return;
+    }
+
+    // Record the print job
+    const recorded = await recordPrintJob();
+    if (!recorded) {
+      setIsLoading(false);
+      return;
+    }
+    
+    try {
+      // Create a hidden iframe for printing
+      const iframe = document.createElement('iframe');
+      iframe.style.display = 'none';
+      document.body.appendChild(iframe);
+      
+      // Check if file is a Word document
+      const isWordDoc = fileToUpload.name.toLowerCase().endsWith('.docx') || 
+                        fileToUpload.name.toLowerCase().endsWith('.doc');
+
+      if (isWordDoc) {
+        try {
+          // For Word documents, use mammoth to convert and print
+          const arrayBuffer = await fileToUpload.arrayBuffer();
+          const result = await mammoth.convertToHtml({ arrayBuffer });
+          const htmlContent = result.value;
+          
+          // Write content to iframe
+          iframe.contentDocument.write(`
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <title>${fileToUpload.name}</title>
+                <style>
+                  body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+                  img { max-width: 100%; }
+                </style>
+              </head>
+              <body>
+                ${htmlContent}
+              </body>
+            </html>
+          `);
+          iframe.contentDocument.close();
+          
+          // Print the iframe content
+          iframe.contentWindow.print();
+        } catch (error) {
+          console.error("Error converting Word document:", error);
+          alert("Error converting Word document. Please try another option.");
+          setIsLoading(false);
+          return;
+        }
+      } else {
+        // For PDFs, images and other files, create an iframe with the file URL
+        iframe.onload = function() {
+          // Print once the iframe is loaded
+          iframe.contentWindow.print();
+        };
+        
+        // Set the source based on file type
+        if (filePreviewUrl.toLowerCase().endsWith('.pdf')) {
+          iframe.src = filePreviewUrl + '#toolbar=0&navpanes=0&scrollbar=0';
+        } else {
+          // For images and other content
+          iframe.contentDocument.write(`
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <title>${fileToUpload.name}</title>
+                <style>
+                  body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; }
+                  img { max-width: 100%; max-height: 100vh; }
+                </style>
+              </head>
+              <body>
+                <img src="${filePreviewUrl}" alt="${fileToUpload.name}" />
+              </body>
+            </html>
+          `);
+          iframe.contentDocument.close();
+          
+          // Print immediately for images
+          setTimeout(() => {
+            iframe.contentWindow.print();
+          }, 500);
+        }
+      }
+      
+      // Clean up the iframe after printing
+      setTimeout(() => {
+        document.body.removeChild(iframe);
+        setIsLoading(false);
+      }, 2000);
+      
+    } catch (error) {
+      console.error("Error printing document:", error);
+      alert("Error printing document. Please try again later.");
+      setIsLoading(false);
+    }
+  };
+
+  // Function to record the print job in Firebase
+  const recordPrintJob = async () => {
+    try {
+      // Record the print job in Firebase
+       const printJobsRef = dbRef(realtimeDb, "files");
+       const printerName = "Browser Print Dialog";
+       console.log("Selected printer:", printerName);
+       await push(printJobsRef, {
+         fileName: fileToUpload?.name,
+        fileUrl: filePreviewUrl, 
+        printerName: printerName,
+         copies: copies,
+         paperSize: selectedSize,
+         isColor: isColor,
+         orientation: orientation,
+         pageOption: selectedPageOption,
+         customPageRange: customPageRange,
+         totalPages: totalPages,
+        finalPrice: calculatedPrice,
+         timestamp: new Date().toISOString(),
+        status: "Completed"
+       });
+ 
+      // Deduct coins
+      const coinRef = dbRef(realtimeDb, "coinCount");
+       const updatedCoins = availableCoins - calculatedPrice;
+             await update(coinRef, { availableCoins: updatedCoins });
+      
+      // Update local state
+      setAvailableCoins(updatedCoins);
+      
+      return true;
+     } catch (error) {
+      console.error("Error recording print job:", error);
+      alert("Failed to record print job. Please try again.");
+      return false;
+    }
+  };
+
+  // Add a function to handle printing from the GroupDocs viewer
+  const handleCloseExternalViewer = () => {
+    setUseExternalViewer(false);
+    setExternalViewerUrl("");
+  };
+
+  // Add a function to handle direct downloading for Word docs
+  const handleDocDownload = () => {
+    if (!filePreviewUrl) return;
+    
+    // Create an anchor element
+    const downloadLink = document.createElement('a');
+    downloadLink.href = filePreviewUrl;
+    
+    // Set the download attribute with the file name
+    downloadLink.download = fileToUpload?.name || 'document.docx';
+    
+    // Append to the body
+    document.body.appendChild(downloadLink);
+    
+    // Trigger the download
+    downloadLink.click();
+    
+    // Clean up
+    document.body.removeChild(downloadLink);
+  };
+
+  return (
+    <div className="p-4 bg-gray-50">
+      <div className="flex items-center mb-6">
+        <MiniNav title="USB Print" />
+      </div>
+
+      {showModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-8 rounded-md shadow-md relative max-w-full">
+            {/* Close Button */}
+            <button
+              onClick={closeModal}
+              className="absolute top-2 right-2 text-2xl font-bold hover:text-red-600"
+            >
+              <X size={24} />
+            </button>
+
+            <h2 className="text-4xl font-bold mb-4 text-center">
+              Guide
+            </h2>
+
+            <ul className="list-disc list-inside mb-4 text-2xl">
+              <li><span className="font-bold text-blue-500">Please send your file via USB to VendoPrint.</span></li>
+              <li className="font-bold">Make sure you have enough coins in your account.</li>
+              <li className="font-semibold">Once your file is transferred, select or browse it below to upload.</li>
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {/* External Viewer Modal */}
+      {useExternalViewer && externalViewerUrl && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-lg w-full h-[90vh] flex flex-col max-w-6xl">
+            <div className="flex justify-between items-center p-4 border-b">
+              <h2 className="text-xl font-semibold">Document Preview - {fileToUpload?.name}</h2>
+              <div className="flex items-center gap-4">
+                <button
+                  className="px-4 py-2 bg-primary text-white rounded-md hover:bg-primary-dark flex items-center"
+                  onClick={() => {
+                    const printUrl = externalViewerUrl.replace('/embed?', '/view?');
+                    window.open(printUrl, '_blank', 'width=800,height=600');
+                  }}
+                >
+                  <Printer size={18} className="mr-2" />
+                  Open Print View
+                </button>
+                <button
+                  className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 flex items-center"
+                  onClick={handleDocDownload}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                  Download
+                </button>
+                <button
+                  onClick={handleCloseExternalViewer}
+                  className="p-2 rounded-full hover:bg-gray-100"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <iframe 
+                src={externalViewerUrl}
+                className="w-full h-full border-none" 
+                title="Document Preview"
+                sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+                referrerpolicy="no-referrer"
+              />
+            </div>
+            <div className="p-4 bg-gray-100 border-t text-center">
+              <p className="text-sm text-gray-600 mb-2">Having trouble seeing the document?</p>
+              <a 
+                href={externalViewerUrl} 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                Open in new tab
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Print Preview Modal */}
+      {showPrintPreview && (
+        <PrintPreview
+          fileName={fileToUpload?.name}
+          fileUrl={filePreviewUrl}
+          fileToUpload={fileToUpload}
+          copies={copies}
+          pageSize={selectedSize}
+          isColor={isColor}
+          orientation={orientation}
+          pageOption={selectedPageOption}
+          customRange={customPageRange}
+          onClose={() => setShowPrintPreview(false)}
+          isPrinting={isLoading}
+        />
+      )}
+
+      <div className="flex flex-col w-full h-full bg-white rounded-lg shadow-md p-6 space-y-6">
+        <div className="flex flex-col md:flex-row w-full gap-6">
+          <div className="w-full md:w-1/2 flex flex-col space-y-4">
+            <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200">
+              <h2 className="text-xl font-bold text-primary mb-4 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                  <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+                Choose File
+              </h2>
+              <div className="relative">
+                <input
+                  type="file"
+                  onChange={handleFileSelect}
+                  className="w-full border-2 border-gray-300 rounded p-2 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-primary file:text-white hover:file:bg-primary-dark"
+                />
+                {fileToUpload && (
+                  <div className="mt-2 text-sm text-gray-600">
+                    Selected: <span className="font-medium">{fileToUpload.name}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200">
+              <div className="flex justify-between items-center mb-4">
+                {/* <h2 className="text-xl font-bold text-primary flex items-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="1" x2="12" y2="23"></line>
+                    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+                  </svg>
+                  Pricing
+                </h2> */}
+                <div className="text-right">
+                  <p className="font-bold text-gray-700 text-xl">
+                    Balance: <span className="text-green-600">{availableCoins}</span> coins
+                  </p>
+                </div>
+              </div>
+
+              <SmartPriceToggle
+                paperSize={selectedSize}
+                isColor={isColor}
+                copies={copies}
+                totalPages={totalPages}
+                setTotalPages={setTotalPages}
+                isSmartPriceEnabled={isSmartPriceEnabled}
+                setIsSmartPriceEnabled={setIsSmartPriceEnabled}
+                calculatedPrice={calculatedPrice}
+                setCalculatedPrice={setCalculatedPrice}
+                selectedPageOption={selectedPageOption}
+                setSelectedPageOption={setSelectedPageOption}
+                customPageRange={customPageRange}
+                setCustomPageRange={setCustomPageRange}
+                filePreviewUrl={filePreviewUrl}
+              />
+            </div>
+          </div>
+
+          <div className="w-full md:w-1/2">
+            <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200 h-full">
+              <h2 className="text-xl font-bold text-primary mb-4 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                  <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                  <polyline points="21 15 16 10 5 21"></polyline>
+                </svg>
+                Document Preview
+              </h2>
+              <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                <DocumentPreview 
+                  fileUrl={filePreviewUrl} 
+                  fileName={fileToUpload?.name} 
+                  fileToUpload={fileToUpload}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-center">
+          <button
+            onClick={handlePrint}
+            disabled={isLoading || !filePreviewUrl}
+            className={`px-8 py-3 text-white text-lg font-bold rounded-lg flex items-center justify-center transition-all ${
+              isLoading || !filePreviewUrl 
+                ? "bg-gray-400 cursor-not-allowed" 
+                : "bg-primary hover:bg-primary-dark shadow-lg hover:shadow-xl"
+            }`}
+          >
+            {isLoading ? (
+              <>
+                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Processing...
+              </>
+            ) : (
+              <>
+                Print Document
+                <Printer className="ml-2" />
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Usb;

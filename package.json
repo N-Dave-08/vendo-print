@@ -1,0 +1,42 @@
+{
+  "name": "vendoprint",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "vite",
+    "build": "vite build",
+    "serve": "vite preview",
+    "backend": "nodemon backend/server.js",
+    "frontend": "npm run dev --prefix frontend",
+    "dev": "concurrently \"npm run frontend\" \"npm run backend\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "axios": "^1.7.9",
+    "cloudconvert": "^2.3.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "electron": "^34.2.0",
+    "electron-print": "^1.0.2",
+    "electron-printer": "^0.0.5",
+    "express": "^4.21.2",
+    "express-fileupload": "^1.5.1",
+    "firebase": "^11.4.0",
+    "firebase-admin": "^13.0.2",
+    "fs": "^0.0.1-security",
+    "googleapis": "^144.0.0",
+    "multer": "^1.4.5-lts.1",
+    "node-printer": "^1.0.4",
+    "pdf-lib": "^1.17.1",
+    "pdf-to-printer": "^5.6.0",
+    "printer": "^0.4.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "nodemon": "^3.1.9"
+  }
+}
