@@ -25,7 +25,7 @@ import ClientContainer from "../components/containers/ClientContainer";
 const getGroupDocsViewerUrl = (fileUrl) => {
   // Encode the file URL to be used as a parameter
   const encodedFileUrl = encodeURIComponent(fileUrl);
-  
+
   // Return a direct URL to the GroupDocs viewer
   return `https://products.groupdocs.app/viewer/view?file=${encodedFileUrl}`;
 };
@@ -34,7 +34,7 @@ const getGroupDocsViewerUrl = (fileUrl) => {
 const openInGroupDocs = (fileUrl) => {
   const encodedFileUrl = encodeURIComponent(fileUrl);
   const groupDocsUrl = `https://products.groupdocs.app/viewer/view?file=${encodedFileUrl}`;
-  
+
   // Open GroupDocs in a new tab
   window.open(groupDocsUrl, '_blank');
 };
@@ -74,7 +74,7 @@ const Usb = () => {
 
   useEffect(() => {
     const coinRef = dbRef(realtimeDb, "coinCount/availableCoins");
-    
+
     // Listen for real-time updates
     const unsubscribe = onValue(coinRef, (snapshot) => {
       if (snapshot.exists()) {
@@ -85,7 +85,7 @@ const Usb = () => {
     }, (error) => {
       console.error("Error fetching available coins:", error);
     });
-  
+
     return () => unsubscribe();
   }, []);
 
@@ -99,7 +99,7 @@ const Usb = () => {
 
     // If PDF, get total pages
     if (file.type === "application/pdf") {
-      const reader = new FileReader();  
+      const reader = new FileReader();
       reader.onload = async (e) => {
         const pdfData = new Uint8Array(e.target.result);
         const pdfDoc = await PDFDocument.load(pdfData);
@@ -136,12 +136,12 @@ const Usb = () => {
     if (!file) {
       return;
     }
-    
+
     // Create a unique filename to avoid collisions
     const timestamp = new Date().getTime();
     const uniqueFileName = `${timestamp}_${file.name}`;
     const storageRef = ref(storage, `uploads/${uniqueFileName}`);
-    
+
     // Set metadata to ensure files are publicly readable
     const metadata = {
       contentType: file.type,
@@ -149,7 +149,7 @@ const Usb = () => {
         'public': 'true'
       }
     };
-    
+
     const uploadTask = uploadBytesResumable(storageRef, file, metadata);
 
     uploadTask.on(
@@ -168,7 +168,7 @@ const Usb = () => {
         try {
           const url = await getDownloadURL(uploadTask.snapshot.ref);
           setFilePreviewUrl(url);
-          
+
           // Push file details to Firebase Realtime Database
           const fileRef = push(dbRef(realtimeDb, "uploadedFiles"));
           await set(fileRef, {
@@ -176,6 +176,7 @@ const Usb = () => {
             fileUrl: url,
             totalPages,
             uploadedAt: new Date().toISOString(),
+            uploadSource: "usb"
           });
 
         } catch (error) {
@@ -189,32 +190,32 @@ const Usb = () => {
 
   // Add a function to render DOCX as HTML using mammoth.js
   const renderDocxAsHtml = async () => {
-    if (!fileToUpload || 
-        !(fileToUpload.name.toLowerCase().endsWith('.docx') || 
-          fileToUpload.name.toLowerCase().endsWith('.doc'))) {
+    if (!fileToUpload ||
+      !(fileToUpload.name.toLowerCase().endsWith('.docx') ||
+        fileToUpload.name.toLowerCase().endsWith('.doc'))) {
       alert("Please upload a valid Word document.");
       return;
     }
-    
-     setIsLoading(true);
-    
+
+    setIsLoading(true);
+
     try {
       // Read the file as an ArrayBuffer
       const arrayBuffer = await fileToUpload.arrayBuffer();
-      
+
       // Use mammoth to convert to HTML
       const result = await mammoth.convertToHtml({ arrayBuffer });
       const htmlContent = result.value;
-      
+
       // Open a new window with the HTML content
       const printWindow = window.open('', '_blank', 'width=800,height=600');
-      
+
       if (!printWindow) {
         alert("Please allow pop-ups to open the preview.");
-       setIsLoading(false);
-       return;
-     }
-      
+        setIsLoading(false);
+        return;
+      }
+
       // Write the HTML content to the window
       printWindow.document.write(`
         <!DOCTYPE html>
@@ -277,9 +278,9 @@ const Usb = () => {
           </body>
         </html>
       `);
-      
+
       printWindow.document.close();
-      
+
     } catch (error) {
       console.error("Error rendering document:", error);
       alert("Error rendering the document. Please try another option.");
@@ -291,7 +292,7 @@ const Usb = () => {
   // Update the handlePrint function to go directly to browser print dialog
   const handlePrint = async () => {
     setIsLoading(true);
-    
+
     if (!fileToUpload) {
       alert("No file selected! Please upload a file before printing.");
       setIsLoading(false);
@@ -328,16 +329,16 @@ const Usb = () => {
       setIsLoading(false);
       return;
     }
-    
+
     try {
       // Create a hidden iframe for printing
       const iframe = document.createElement('iframe');
       iframe.style.display = 'none';
       document.body.appendChild(iframe);
-      
+
       // Check if file is a Word document
-      const isWordDoc = fileToUpload.name.toLowerCase().endsWith('.docx') || 
-                        fileToUpload.name.toLowerCase().endsWith('.doc');
+      const isWordDoc = fileToUpload.name.toLowerCase().endsWith('.docx') ||
+        fileToUpload.name.toLowerCase().endsWith('.doc');
 
       if (isWordDoc) {
         try {
@@ -345,7 +346,7 @@ const Usb = () => {
           const arrayBuffer = await fileToUpload.arrayBuffer();
           const result = await mammoth.convertToHtml({ arrayBuffer });
           const htmlContent = result.value;
-          
+
           // Write content to iframe
           iframe.contentDocument.write(`
             <!DOCTYPE html>
@@ -363,7 +364,7 @@ const Usb = () => {
             </html>
           `);
           iframe.contentDocument.close();
-          
+
           // Print the iframe content
           iframe.contentWindow.print();
         } catch (error) {
@@ -374,11 +375,11 @@ const Usb = () => {
         }
       } else {
         // For PDFs, images and other files, create an iframe with the file URL
-        iframe.onload = function() {
+        iframe.onload = function () {
           // Print once the iframe is loaded
           iframe.contentWindow.print();
         };
-        
+
         // Set the source based on file type
         if (filePreviewUrl.toLowerCase().endsWith('.pdf')) {
           iframe.src = filePreviewUrl + '#toolbar=0&navpanes=0&scrollbar=0';
@@ -400,20 +401,20 @@ const Usb = () => {
             </html>
           `);
           iframe.contentDocument.close();
-          
+
           // Print immediately for images
           setTimeout(() => {
             iframe.contentWindow.print();
           }, 500);
         }
       }
-      
+
       // Clean up the iframe after printing
       setTimeout(() => {
         document.body.removeChild(iframe);
         setIsLoading(false);
       }, 2000);
-      
+
     } catch (error) {
       console.error("Error printing document:", error);
       alert("Error printing document. Please try again later.");
@@ -425,35 +426,35 @@ const Usb = () => {
   const recordPrintJob = async () => {
     try {
       // Record the print job in Firebase
-       const printJobsRef = dbRef(realtimeDb, "files");
-       const printerName = "Browser Print Dialog";
-       console.log("Selected printer:", printerName);
-       await push(printJobsRef, {
-         fileName: fileToUpload?.name,
-        fileUrl: filePreviewUrl, 
+      const printJobsRef = dbRef(realtimeDb, "files");
+      const printerName = "Browser Print Dialog";
+      console.log("Selected printer:", printerName);
+      await push(printJobsRef, {
+        fileName: fileToUpload?.name,
+        fileUrl: filePreviewUrl,
         printerName: printerName,
-         copies: copies,
-         paperSize: selectedSize,
-         isColor: isColor,
-         orientation: orientation,
-         pageOption: selectedPageOption,
-         customPageRange: customPageRange,
-         totalPages: totalPages,
+        copies: copies,
+        paperSize: selectedSize,
+        isColor: isColor,
+        orientation: orientation,
+        pageOption: selectedPageOption,
+        customPageRange: customPageRange,
+        totalPages: totalPages,
         finalPrice: calculatedPrice,
-         timestamp: new Date().toISOString(),
+        timestamp: new Date().toISOString(),
         status: "Completed"
-       });
- 
+      });
+
       // Deduct coins
       const coinRef = dbRef(realtimeDb, "coinCount");
-       const updatedCoins = availableCoins - calculatedPrice;
-             await update(coinRef, { availableCoins: updatedCoins });
-      
+      const updatedCoins = availableCoins - calculatedPrice;
+      await update(coinRef, { availableCoins: updatedCoins });
+
       // Update local state
       setAvailableCoins(updatedCoins);
-      
+
       return true;
-     } catch (error) {
+    } catch (error) {
       console.error("Error recording print job:", error);
       alert("Failed to record print job. Please try again.");
       return false;
@@ -469,20 +470,20 @@ const Usb = () => {
   // Add a function to handle direct downloading for Word docs
   const handleDocDownload = () => {
     if (!filePreviewUrl) return;
-    
+
     // Create an anchor element
     const downloadLink = document.createElement('a');
     downloadLink.href = filePreviewUrl;
-    
+
     // Set the download attribute with the file name
     downloadLink.download = fileToUpload?.name || 'document.docx';
-    
+
     // Append to the body
     document.body.appendChild(downloadLink);
-    
+
     // Trigger the download
     downloadLink.click();
-    
+
     // Clean up
     document.body.removeChild(downloadLink);
   };
@@ -569,9 +570,9 @@ const Usb = () => {
                       </div>
                     </div>
                     <div className="flex-1 overflow-hidden">
-                      <iframe 
+                      <iframe
                         src={externalViewerUrl}
-                        className="w-full h-full border-none" 
+                        className="w-full h-full border-none"
                         title="Document Preview"
                         sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
                         referrerpolicy="no-referrer"
@@ -579,9 +580,9 @@ const Usb = () => {
                     </div>
                     <div className="p-4 bg-gray-100 border-t text-center">
                       <p className="text-sm text-gray-600 mb-2">Having trouble seeing the document?</p>
-                      <a 
-                        href={externalViewerUrl} 
-                        target="_blank" 
+                      <a
+                        href={externalViewerUrl}
+                        target="_blank"
                         rel="noopener noreferrer"
                         className="text-primary hover:underline"
                       >
@@ -677,9 +678,9 @@ const Usb = () => {
                 Document Preview
               </h2>
               <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-                <DocumentPreview 
-                  fileUrl={filePreviewUrl} 
-                  fileName={fileToUpload?.name} 
+                <DocumentPreview
+                  fileUrl={filePreviewUrl}
+                  fileName={fileToUpload?.name}
                   fileToUpload={fileToUpload}
                 />
               </div>
@@ -691,11 +692,10 @@ const Usb = () => {
           <button
             onClick={handlePrint}
             disabled={isLoading || !filePreviewUrl}
-            className={`px-8 py-3 text-white text-lg font-bold rounded-lg flex items-center justify-center transition-all ${
-              isLoading || !filePreviewUrl 
-                ? "bg-gray-400 cursor-not-allowed" 
-                : "bg-primary hover:bg-primary-dark shadow-lg hover:shadow-xl"
-            }`}
+            className={`px-8 py-3 text-white text-lg font-bold rounded-lg flex items-center justify-center transition-all ${isLoading || !filePreviewUrl
+              ? "bg-gray-400 cursor-not-allowed"
+              : "bg-primary hover:bg-primary-dark shadow-lg hover:shadow-xl"
+              }`}
           >
             {isLoading ? (
               <>

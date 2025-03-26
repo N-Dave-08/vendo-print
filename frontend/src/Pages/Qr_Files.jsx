@@ -20,13 +20,13 @@ const QRUpload = () => {
     fileUrl: queryParams.get("url") || "",
     totalPages: parseInt(queryParams.get("pages")) || 1
   });
-  
+
   // Print settings
   const [selectedPrinter, setSelectedPrinter] = useState("");
   const [copies, setCopies] = useState(1);
   const [isColor, setIsColor] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  
+
   // Balance and price
   const [balance, setBalance] = useState(0);
   const [price, setPrice] = useState(0);
@@ -54,13 +54,13 @@ const QRUpload = () => {
 
     // Base price per page
     const basePricePerPage = 5;
-    
+
     // Color multiplier
     const colorMultiplier = isColor ? 2 : 1;
-    
+
     // Calculate total price
     const calculatedPrice = basePricePerPage * selectedFile.totalPages * copies * colorMultiplier;
-    
+
     setPrice(calculatedPrice);
   }, [selectedFile, copies, isColor]);
 
@@ -73,7 +73,11 @@ const QRUpload = () => {
         const filesArray = Object.keys(data).map((key) => ({
           id: key,
           ...data[key],
-        }));
+        }))
+          // Filter to only include files that were uploaded via QR
+          // Files uploaded via QR should have a uploadSource field set to "qr"
+          .filter(file => file.uploadSource === "qr");
+
         setUploadedFiles(filesArray);
       } else {
         setUploadedFiles([]);
@@ -131,7 +135,7 @@ const QRUpload = () => {
       // Add to print queue
       const printJobsRef = dbRef(realtimeDb, "files");
       const newPrintJobRef = dbRef(realtimeDb, "files");
-      
+
       // Add print job details
       await update(newPrintJobRef, {
         fileName: selectedFile.fileName,
@@ -144,11 +148,11 @@ const QRUpload = () => {
         timestamp: new Date().toISOString(),
         status: "Pending"
       });
-      
+
       // Update balance
       const updatedBalance = balance - price;
       await update(dbRef(realtimeDb, "coinCount"), { availableCoins: updatedBalance });
-      
+
       // Show success message
       setTimeout(() => {
         setIsLoading(false);
@@ -203,19 +207,19 @@ const QRUpload = () => {
                 </div>
               </div>
             </div>
-            
+
             {/* Balance and Pricing */}
             <div className="bg-white rounded-lg shadow-sm p-6 mt-auto">
               <p className="text-xl font-bold text-[#31304D] mb-3">
                 Balance: <span className="text-green-500">{balance}</span> coins
               </p>
-              
+
               <p className="text-xl font-bold text-[#31304D]">
                 Smart Price: <span className="text-green-500">₱{price.toFixed(2)}</span>
               </p>
             </div>
           </div>
-          
+
           {/* Right Side - Uploaded Files and Print (2/3 width) */}
           <div className="flex flex-col h-full md:col-span-2">
             {/* Uploaded Files Section */}
@@ -226,7 +230,7 @@ const QRUpload = () => {
                   {uploadedFiles.length} {uploadedFiles.length === 1 ? 'file' : 'files'}
                 </span>
               </h2>
-              
+
               <div className="min-h-[400px]">
                 {uploadedFiles.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full py-12">
@@ -245,9 +249,8 @@ const QRUpload = () => {
                     {uploadedFiles.map((file) => (
                       <div
                         key={file.id}
-                        className={`flex flex-col items-center cursor-pointer p-2 ${
-                          selectedFile.fileName === file.fileName ? "bg-blue-50 rounded-lg" : ""
-                        }`}
+                        className={`flex flex-col items-center cursor-pointer p-2 ${selectedFile.fileName === file.fileName ? "bg-blue-50 rounded-lg" : ""
+                          }`}
                         onClick={() => handleSelectFile(file)}
                       >
                         {/* File Icon */}
@@ -289,7 +292,7 @@ const QRUpload = () => {
                               </div>
                             </div>
                           )}
-                          
+
                           {/* Delete Button - Top Right */}
                           <button
                             onClick={(e) => {
@@ -302,7 +305,7 @@ const QRUpload = () => {
                             <FaTimes size={12} />
                           </button>
                         </div>
-                        
+
                         {/* File Name - Under Icon */}
                         <div className="text-center w-full">
                           <p className="text-sm font-medium text-gray-800 truncate">{file.fileName}</p>
@@ -316,12 +319,12 @@ const QRUpload = () => {
                 )}
               </div>
             </div>
-            
+
             {/* Print Options and Button */}
             <div className="bg-white rounded-lg shadow-sm p-6">
               <div className="flex flex-wrap justify-between items-center mb-4">
                 <h2 className="text-xl font-bold text-[#31304D]">Print Options</h2>
-                
+
                 <div className="flex items-center space-x-6 my-2">
                   <div className="flex items-center">
                     <input
@@ -333,7 +336,7 @@ const QRUpload = () => {
                     />
                     <label htmlFor="color-print" className="ml-2 text-sm font-medium text-gray-700">Color</label>
                   </div>
-                  
+
                   <div className="flex items-center">
                     <label htmlFor="copies" className="text-sm font-medium text-gray-700 mr-2">Copies:</label>
                     <input
@@ -348,15 +351,14 @@ const QRUpload = () => {
                   </div>
                 </div>
               </div>
-              
+
               <button
                 onClick={handlePrint}
                 disabled={!selectedFile.fileName || isLoading}
-                className={`w-full py-3 flex items-center justify-center rounded-lg font-bold text-lg transition-all duration-200 ${
-                  !selectedFile.fileName || isLoading
-                    ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                    : "bg-[#31304D] hover:bg-[#41405D] text-white shadow-sm hover:shadow"
-                }`}
+                className={`w-full py-3 flex items-center justify-center rounded-lg font-bold text-lg transition-all duration-200 ${!selectedFile.fileName || isLoading
+                  ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                  : "bg-[#31304D] hover:bg-[#41405D] text-white shadow-sm hover:shadow"
+                  }`}
               >
                 {isLoading ? (
                   <>

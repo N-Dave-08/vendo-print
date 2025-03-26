@@ -60,7 +60,7 @@ const FileUpload = () => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    
+
     const file = e.dataTransfer.files[0];
     if (file) {
       const fileInput = document.createElement('input');
@@ -75,12 +75,12 @@ const FileUpload = () => {
       alert("No file selected for upload!");
       return;
     }
-  
+
     try {
       setUploadStatus("uploading");
       const storageRef = ref(storage, `uploads/${fileToUpload.name}`);
       const uploadTask = uploadBytesResumable(storageRef, fileToUpload);
-  
+
       uploadTask.on(
         "state_changed",
         null,
@@ -92,18 +92,19 @@ const FileUpload = () => {
           try {
             const url = await getDownloadURL(uploadTask.snapshot.ref);
             setUploadStatus("");
-  
+
             const fileRef = push(dbRef(realtimeDb, "uploadedFiles"));
             await set(fileRef, {
               fileName: fileToUpload.name,
               fileUrl: url,
               totalPages,
               uploadedAt: new Date().toISOString(),
+              uploadSource: "qr"
             });
-  
-            navigate("/printer", { 
-              state: { 
-                fileName: fileToUpload.name, 
+
+            navigate("/printer", {
+              state: {
+                fileName: fileToUpload.name,
                 fileUrl: url,
                 totalPages
               }
@@ -154,8 +155,8 @@ const FileUpload = () => {
 
       <div className="bg-white p-8 rounded-xl shadow-xl w-full max-w-md mx-4">
         <h2 className="text-2xl font-bold mb-6 text-gray-800 text-center">Upload Your File</h2>
-        
-        <div 
+
+        <div
           className={`relative border-2 ${dragActive ? 'border-primary border-solid' : 'border-dashed border-gray-400'} 
           rounded-xl p-8 transition-all duration-300 ease-in-out
           ${dragActive ? 'bg-primary bg-opacity-5' : 'bg-gray-50'}`}
@@ -164,19 +165,19 @@ const FileUpload = () => {
           onDragOver={handleDrag}
           onDrop={handleDrop}
         >
-          <input 
-            type="file" 
-            accept=".pdf,.docx" 
-            className="hidden" 
+          <input
+            type="file"
+            accept=".pdf,.docx"
+            className="hidden"
             onChange={handleFileSelect}
-            id="file-upload" 
+            id="file-upload"
           />
-          <label 
-            htmlFor="file-upload" 
+          <label
+            htmlFor="file-upload"
             className="flex flex-col items-center cursor-pointer"
           >
-            <FontAwesomeIcon 
-              icon={faFileUpload} 
+            <FontAwesomeIcon
+              icon={faFileUpload}
               className={`text-4xl mb-4 ${dragActive ? 'text-primary' : 'text-gray-400'}`}
             />
             <p className="text-center text-gray-600">
