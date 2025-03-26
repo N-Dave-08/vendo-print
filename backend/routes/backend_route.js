@@ -15,6 +15,10 @@ const __dirname = path.dirname(__filename);
 
 const BackendRoutes = express.Router();
 
+// Add a debounce mechanism to prevent multiple scans
+let lastScanTime = 0;
+const SCAN_DEBOUNCE_TIME = 2000; // 2 seconds debounce
+
 // Firebase Routes
 BackendRoutes.post('/add-data', addData);
 BackendRoutes.get('/get-files', getData);
@@ -36,17 +40,28 @@ BackendRoutes.get('/xerox/check-scanner', async (req, res) => {
 
 // Preview endpoint
 BackendRoutes.get('/xerox/preview', async (req, res) => {
+  // Implement debounce to prevent multiple scans
+  const now = Date.now();
+  if (now - lastScanTime < SCAN_DEBOUNCE_TIME) {
+    console.log('Scan request debounced (too soon after last scan)');
+    return res.status(429).json({
+      status: 'error',
+      message: 'Please wait before scanning again'
+    });
+  }
+
+  lastScanTime = now;
   console.log('Starting preview scan...');
   let outputPath = null;
-  
+
   try {
     console.log('Checking scanner availability...');
     await checkScanner();
-    
+
     // Create scans directory in the printer folder
     const scansDir = path.join(path.dirname(__dirname), 'printer', 'scans');
     console.log('Scans directory path:', scansDir);
-    
+
     if (!fs.existsSync(scansDir)) {
       console.log('Creating scans directory...');
       fs.mkdirSync(scansDir, { recursive: true });
@@ -81,9 +96,9 @@ BackendRoutes.get('/xerox/preview', async (req, res) => {
         console.error('Error during cleanup:', cleanupError);
       }
     }
-    res.status(500).json({ 
-      status: 'error', 
-      message: error.message || 'Failed to generate preview.' 
+    res.status(500).json({
+      status: 'error',
+      message: error.message || 'Failed to generate preview.'
     });
   }
 });
@@ -96,7 +111,7 @@ BackendRoutes.post('/xerox/print', async (req, res) => {
     // Get the path of the last scanned preview
     const scansDir = path.join(path.dirname(__dirname), 'printer', 'scans');
     const previewPath = path.join(scansDir, 'preview.bmp');
-    
+
     // Check if the preview file exists
     if (!fs.existsSync(previewPath)) {
       return res.status(400).json({ status: 'error', message: 'No scanned document found' });
@@ -118,15 +133,14 @@ BackendRoutes.post('/xerox/print', async (req, res) => {
     exec(checkPrinterCmd, async (checkError, stdout, stderr) => {
       if (checkError) {
         console.error('Printer check error:', stderr);
-        return res.status(500).json({ 
-          status: 'error', 
-          message: 'Printer is not ready. Please check if it is connected and turned on.' 
+        return res.status(500).json({
+          status: 'error',
+          message: 'Printer is not ready. Please check if it is connected and turned on.'
         });
       }
 
       // If printer is ready, send the print job
-      const printCmd = `
-        powershell.exe -Command "
+      const printCmd = `        powershell.exe -Command "
           Start-Process -FilePath '${previewPath}' -Verb Print -PassThru | 
           ForEach-Object { 
             Start-Sleep -Seconds 1
@@ -138,26 +152,27 @@ BackendRoutes.post('/xerox/print', async (req, res) => {
       exec(printCmd, (printError, printStdout, printStderr) => {
         if (printError) {
           console.error('Print error:', printError);
-          return res.status(500).json({ 
-            status: 'error', 
-            message: 'Failed to print document. Please try again.' 
+          return res.status(500).json({
+            status: 'error',
+            message: 'Failed to print document. Please try again.'
           });
         }
 
-        res.json({ 
-          status: 'success', 
-          message: 'Document printed successfully' 
+        res.json({
+          status: 'success',
+          message: 'Document printed successfully'
         });
       });
     });
 
   } catch (error) {
     console.error('Print endpoint error:', error);
-    res.status(500).json({ 
-      status: 'error', 
-      message: error.message 
+    res.status(500).json({
+      status: 'error',
+      message: error.message
     });
   }
 });
 
 export default BackendRoutes;
+

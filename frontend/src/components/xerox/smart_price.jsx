@@ -1,27 +1,26 @@
 import React, { useEffect } from "react";
 
-function SmartPriceLabel({
-  copies,
-  totalPages,
-  calculatedPrice,
+// Renaming to be consistent with imports in Pages/Xerox.jsx
+const SmartPriceToggle = ({
+  copies = 1,
+  totalPages = 1,
+  calculatedPrice = 0,
   setCalculatedPrice,
   filePreviewUrl
-}) {
-
+}) => {
   useEffect(() => {
+    // Only calculate price if there's a valid preview
+    if (!filePreviewUrl) {
+      setCalculatedPrice(0);
+      return;
+    }
 
     const pricePerPage = 2;
-   
+    let pagesToPrint = totalPages;
+    const totalCost = pricePerPage * copies * pagesToPrint;
 
-
-  let pagesToPrint = totalPages;
-
- 
-
-  const totalCost = pricePerPage * copies * pagesToPrint;
-  setCalculatedPrice(totalCost);
-  
-  }, [ copies, totalPages, setCalculatedPrice,filePreviewUrl]);
+    setCalculatedPrice(totalCost);
+  }, [copies, totalPages, setCalculatedPrice, filePreviewUrl]);
 
   return (
     <div className="mt-8 flex items-center space-x-4 w-full">
@@ -33,4 +32,4 @@ function SmartPriceLabel({
   );
 }
 
-export default SmartPriceLabel;
+export default SmartPriceToggle;

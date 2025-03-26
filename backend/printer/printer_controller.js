@@ -158,15 +158,15 @@ export const printFileHandler = async (req, res) => {
   let processedFilePath = '';
   try {
 
-    const { 
-      printerName, 
-      fileUrl, 
-      isColor, 
-      selectedPageOption, 
-      customPageRange, 
-      orientation, 
-      selectedSize, 
-      customWidth, 
+    const {
+      printerName,
+      fileUrl,
+      isColor,
+      selectedPageOption,
+      customPageRange,
+      orientation,
+      selectedSize,
+      customWidth,
       customHeight,
       copies
     } = req.body;
@@ -198,7 +198,7 @@ export const printFileHandler = async (req, res) => {
     fs.writeFileSync(filePath, response.data);
 
 
-    const pdfBytes = await processPdf(filePath, { 
+    const pdfBytes = await processPdf(filePath, {
       pageOption: selectedPageOption || "All",
       customPageRange: customPageRange || "",
       orientation: orientation || "Portrait",
