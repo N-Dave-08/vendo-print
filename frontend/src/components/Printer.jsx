@@ -7,12 +7,10 @@ import { deleteObject, listAll, getDownloadURL, ref as storageRef } from "fireba
 import { 
           ezlogo,
           vectorImage1,
-          vectorImage2,
           vectorImage3,
           vectorImage4 } from '../assets/Icons';
 
 import { FaTimes, FaFilePdf, FaFileWord, FaFileExcel, FaFileImage} from "react-icons/fa";
-
 
 import M_Qrcode from './M_Qrcode';
 const Printer = () => {
@@ -211,19 +209,6 @@ const cancelPrintJob = (fileId) => {
             </div>
           </Link>
 
-      
-          <div 
-            className="flex flex-col items-center cursor-pointer"
-            onClick={() => navigate('/bt-upload')}
-          >
-            <div className="w-full max-w-xs h-48 bg-gray-100 flex items-center justify-center text-xl font-bold rounded-lg border-4 border-[#31304D] shadow-md">
-              <img src={vectorImage2} alt="Bluetooth" className="w-24 h-24" />
-            </div>
-            <p className="text-2xl font-bold text-[#31304D] mt-2">Bluetooth</p>
-          </div>
-       
-  
-      
             <div className="flex flex-col items-center cursor-pointer" onClick={() => setIsUsbModalOpen(true)}>
               <div className="w-full max-w-xs h-48 bg-gray-100 flex items-center justify-center text-xl font-bold rounded-lg border-4 border-[#31304D] shadow-md">
                 <img src={vectorImage3} alt="USB" className="w-24 h-24" />

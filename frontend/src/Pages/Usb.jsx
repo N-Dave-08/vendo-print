@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { FaArrowLeft } from "react-icons/fa";
 import { Printer, ArrowLeft, X } from "lucide-react";
 import { ezlogo } from "../assets/Icons";
 import MiniNav from "../components/MiniNav";
 
-import CustomPage from "../components/bluetooth/customized_page";
-import DocumentPreview from "../components/bluetooth/document_preview";
-import SmartPriceToggle from "../components/bluetooth/smart_price";
+import CustomPage from "../components/common/customized_page";
+import DocumentPreview from "../components/common/document_preview";
+import SmartPriceToggle from "../components/common/smart_price";
 import PrintPreview from "../components/PrintPreview";
 
 import { realtimeDb, storage } from "../../firebase/firebase_config";
@@ -486,176 +487,191 @@ const Usb = () => {
   };
 
   return (
-    <div className="p-4 bg-gray-50">
-      <div className="flex items-center mb-6">
-        <MiniNav title="USB Print" />
+    <div className="p-4">
+      <div className="flex items-center space-x-4 mb-6">
+        <img src={ezlogo} alt="EZ Logo" className="w-16 h-16" />
+        <h1 className="text-4xl font-bold text-[#31304D]">
+          Kiosk Vendo Printer
+        </h1>
       </div>
 
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white p-8 rounded-md shadow-md relative max-w-full">
-            {/* Close Button */}
-            <button
-              onClick={closeModal}
-              className="absolute top-2 right-2 text-2xl font-bold hover:text-red-600"
-            >
-              <X size={24} />
-            </button>
-
-            <h2 className="text-4xl font-bold mb-4 text-center">
-              Guide
-            </h2>
-
-            <ul className="list-disc list-inside mb-4 text-2xl">
-              <li><span className="font-bold text-blue-500">Please send your file via USB to VendoPrint.</span></li>
-              <li className="font-bold">Make sure you have enough coins in your account.</li>
-              <li className="font-semibold">Once your file is transferred, select or browse it below to upload.</li>
-            </ul>
-          </div>
-        </div>
-      )}
-
-      {/* External Viewer Modal */}
-      {useExternalViewer && externalViewerUrl && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-lg w-full h-[90vh] flex flex-col max-w-6xl">
-            <div className="flex justify-between items-center p-4 border-b">
-              <h2 className="text-xl font-semibold">Document Preview - {fileToUpload?.name}</h2>
-              <div className="flex items-center gap-4">
-                <button
-                  className="px-4 py-2 bg-primary text-white rounded-md hover:bg-primary-dark flex items-center"
-                  onClick={() => {
-                    const printUrl = externalViewerUrl.replace('/embed?', '/view?');
-                    window.open(printUrl, '_blank', 'width=800,height=600');
-                  }}
-                >
-                  <Printer size={18} className="mr-2" />
-                  Open Print View
-                </button>
-                <button
-                  className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 flex items-center"
-                  onClick={handleDocDownload}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                    <polyline points="7 10 12 15 17 10"></polyline>
-                    <line x1="12" y1="15" x2="12" y2="3"></line>
-                  </svg>
-                  Download
-                </button>
-                <button
-                  onClick={handleCloseExternalViewer}
-                  className="p-2 rounded-full hover:bg-gray-100"
-                >
-                  <X size={24} />
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 overflow-hidden">
-              <iframe 
-                src={externalViewerUrl}
-                className="w-full h-full border-none" 
-                title="Document Preview"
-                sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
-                referrerpolicy="no-referrer"
-              />
-            </div>
-            <div className="p-4 bg-gray-100 border-t text-center">
-              <p className="text-sm text-gray-600 mb-2">Having trouble seeing the document?</p>
-              <a 
-                href={externalViewerUrl} 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="text-primary hover:underline"
+      {/* Main Box Container */}
+      <div className="flex flex-col w-full h-full bg-gray-200 rounded-lg shadow-md border-4 border-[#31304D] p-6 space-x-4 relative">
+        {/* Top Section */}
+        <div className="flex w-full space-x-6">
+          {/* Left Side */}
+          <div className="w-1/2 flex flex-col">
+            <div className="flex items-center">
+              <button
+                className="w-10 h-10 bg-gray-200 text-[#31304D] flex items-center justify-center rounded-lg border-2 border-[#31304D] mr-4"
+                onClick={() => navigate(-1)}
               >
-                Open in new tab
-              </a>
+                <FaArrowLeft className="text-2xl text-[#31304D]" />
+              </button>
+              <p className="text-3xl font-bold text-[#31304D]">USB</p>
             </div>
-          </div>
-        </div>
-      )}
 
-      {/* Print Preview Modal */}
-      {showPrintPreview && (
-        <PrintPreview
-          fileName={fileToUpload?.name}
-          fileUrl={filePreviewUrl}
-          fileToUpload={fileToUpload}
-          copies={copies}
-          pageSize={selectedSize}
-          isColor={isColor}
-          orientation={orientation}
-          pageOption={selectedPageOption}
-          customRange={customPageRange}
-          onClose={() => setShowPrintPreview(false)}
-          isPrinting={isLoading}
-        />
-      )}
+            {/* Rest of the content */}
+            <div className="mt-6 space-y-4">
+              {showModal && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                  <div className="bg-white p-8 rounded-md shadow-md relative max-w-full">
+                    {/* Close Button */}
+                    <button
+                      onClick={closeModal}
+                      className="absolute top-2 right-2 text-2xl font-bold hover:text-red-600"
+                    >
+                      <X size={24} />
+                    </button>
 
-      <div className="flex flex-col w-full h-full bg-white rounded-lg shadow-md p-6 space-y-6">
-        <div className="flex flex-col md:flex-row w-full gap-6">
-          <div className="w-full md:w-1/2 flex flex-col space-y-4">
-            <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200">
-              <h2 className="text-xl font-bold text-primary mb-4 flex items-center">
-                <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                  <polyline points="14 2 14 8 20 8"></polyline>
-                  <line x1="16" y1="13" x2="8" y2="13"></line>
-                  <line x1="16" y1="17" x2="8" y2="17"></line>
-                  <polyline points="10 9 9 9 8 9"></polyline>
-                </svg>
-                Choose File
-              </h2>
-              <div className="relative">
-                <input
-                  type="file"
-                  onChange={handleFileSelect}
-                  className="w-full border-2 border-gray-300 rounded p-2 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-primary file:text-white hover:file:bg-primary-dark"
-                />
-                {fileToUpload && (
-                  <div className="mt-2 text-sm text-gray-600">
-                    Selected: <span className="font-medium">{fileToUpload.name}</span>
+                    <h2 className="text-4xl font-bold mb-4 text-center">
+                      Guide
+                    </h2>
+
+                    <ul className="list-disc list-inside mb-4 text-2xl">
+                      <li><span className="font-bold text-blue-500">Please send your file via USB to VendoPrint.</span></li>
+                      <li className="font-bold">Make sure you have enough coins in your account.</li>
+                      <li className="font-semibold">Once your file is transferred, select or browse it below to upload.</li>
+                    </ul>
                   </div>
-                )}
-              </div>
-            </div>
+                </div>
+              )}
 
-            <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200">
-              <div className="flex justify-between items-center mb-4">
-                {/* <h2 className="text-xl font-bold text-primary flex items-center">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="1" x2="12" y2="23"></line>
-                    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
-                  </svg>
-                  Pricing
-                </h2> */}
-                <div className="text-right">
-                  <p className="font-bold text-gray-700 text-xl">
-                    Balance: <span className="text-green-600">{availableCoins}</span> coins
-                  </p>
+              {/* External Viewer Modal */}
+              {useExternalViewer && externalViewerUrl && (
+                <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+                  <div className="bg-white rounded-lg shadow-lg w-full h-[90vh] flex flex-col max-w-6xl">
+                    <div className="flex justify-between items-center p-4 border-b">
+                      <h2 className="text-xl font-semibold">Document Preview - {fileToUpload?.name}</h2>
+                      <div className="flex items-center gap-4">
+                        <button
+                          className="px-4 py-2 bg-primary text-white rounded-md hover:bg-primary-dark flex items-center"
+                          onClick={() => {
+                            const printUrl = externalViewerUrl.replace('/embed?', '/view?');
+                            window.open(printUrl, '_blank', 'width=800,height=600');
+                          }}
+                        >
+                          <Printer size={18} className="mr-2" />
+                          Open Print View
+                        </button>
+                        <button
+                          className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 flex items-center"
+                          onClick={handleDocDownload}
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                          </svg>
+                          Download
+                        </button>
+                        <button
+                          onClick={handleCloseExternalViewer}
+                          className="p-2 rounded-full hover:bg-gray-100"
+                        >
+                          <X size={24} />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex-1 overflow-hidden">
+                      <iframe 
+                        src={externalViewerUrl}
+                        className="w-full h-full border-none" 
+                        title="Document Preview"
+                        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
+                        referrerpolicy="no-referrer"
+                      />
+                    </div>
+                    <div className="p-4 bg-gray-100 border-t text-center">
+                      <p className="text-sm text-gray-600 mb-2">Having trouble seeing the document?</p>
+                      <a 
+                        href={externalViewerUrl} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline"
+                      >
+                        Open in new tab
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Print Preview Modal */}
+              {showPrintPreview && (
+                <PrintPreview
+                  fileName={fileToUpload?.name}
+                  fileUrl={filePreviewUrl}
+                  fileToUpload={fileToUpload}
+                  copies={copies}
+                  pageSize={selectedSize}
+                  isColor={isColor}
+                  orientation={orientation}
+                  pageOption={selectedPageOption}
+                  customRange={customPageRange}
+                  onClose={() => setShowPrintPreview(false)}
+                  isPrinting={isLoading}
+                />
+              )}
+
+              <div className="flex flex-col space-y-4">
+                <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200">
+                  <h2 className="text-xl font-bold text-primary mb-4 flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                      <polyline points="14 2 14 8 20 8"></polyline>
+                      <line x1="16" y1="13" x2="8" y2="13"></line>
+                      <line x1="16" y1="17" x2="8" y2="17"></line>
+                      <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                    Choose File
+                  </h2>
+                  <div className="relative">
+                    <input
+                      type="file"
+                      onChange={handleFileSelect}
+                      className="w-full border-2 border-gray-300 rounded p-2 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-primary file:text-white hover:file:bg-primary-dark"
+                    />
+                    {fileToUpload && (
+                      <div className="mt-2 text-sm text-gray-600">
+                        Selected: <span className="font-medium">{fileToUpload.name}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200">
+                  <div className="flex justify-between items-center mb-4">
+                    <div className="text-right">
+                      <p className="font-bold text-gray-700 text-xl">
+                        Balance: <span className="text-green-600">{availableCoins}</span> coins
+                      </p>
+                    </div>
+                  </div>
+
+                  <SmartPriceToggle
+                    paperSize={selectedSize}
+                    isColor={isColor}
+                    copies={copies}
+                    totalPages={totalPages}
+                    setTotalPages={setTotalPages}
+                    isSmartPriceEnabled={isSmartPriceEnabled}
+                    setIsSmartPriceEnabled={setIsSmartPriceEnabled}
+                    calculatedPrice={calculatedPrice}
+                    setCalculatedPrice={setCalculatedPrice}
+                    selectedPageOption={selectedPageOption}
+                    setSelectedPageOption={setSelectedPageOption}
+                    customPageRange={customPageRange}
+                    setCustomPageRange={setCustomPageRange}
+                    filePreviewUrl={filePreviewUrl}
+                  />
                 </div>
               </div>
-
-              <SmartPriceToggle
-                paperSize={selectedSize}
-                isColor={isColor}
-                copies={copies}
-                totalPages={totalPages}
-                setTotalPages={setTotalPages}
-                isSmartPriceEnabled={isSmartPriceEnabled}
-                setIsSmartPriceEnabled={setIsSmartPriceEnabled}
-                calculatedPrice={calculatedPrice}
-                setCalculatedPrice={setCalculatedPrice}
-                selectedPageOption={selectedPageOption}
-                setSelectedPageOption={setSelectedPageOption}
-                customPageRange={customPageRange}
-                setCustomPageRange={setCustomPageRange}
-                filePreviewUrl={filePreviewUrl}
-              />
             </div>
           </div>
 
-          <div className="w-full md:w-1/2">
+          {/* Right Side */}
+          <div className="w-1/2">
             <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200 h-full">
               <h2 className="text-xl font-bold text-primary mb-4 flex items-center">
                 <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -676,7 +692,7 @@ const Usb = () => {
           </div>
         </div>
 
-        <div className="flex justify-center">
+        <div className="flex justify-center mt-6 mb-4">
           <button
             onClick={handlePrint}
             disabled={isLoading || !filePreviewUrl}

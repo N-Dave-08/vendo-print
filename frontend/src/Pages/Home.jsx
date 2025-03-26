@@ -28,16 +28,18 @@ const Sidebar = () => {
             />
           </div>
         </Link>
+      </div>
 
-        {/* Settings Icon - Fully Rounded When Active */}
+      {/* Admin Icon at Bottom */}
+      <div className="mt-auto">
         <Link to="/settings">
           <div
-            className={`w-20 h-12 flex items-center justify-center cursor-pointer transition ml-11
+            className={`w-20 h-12 flex items-center justify-center cursor-pointer transition ml-11 mb-4
               ${location.pathname === "/settings" ? "bg-white rounded-full" : "rounded-l-full"}
             `}
           >
             <FaUser
-              className={`text-2xl ml-[-4px] // Increased icon size
+              className={`text-2xl ml-[-4px]
                 ${location.pathname === "/settings" ? "text-gray-900" : "text-white"}
               `}
             />

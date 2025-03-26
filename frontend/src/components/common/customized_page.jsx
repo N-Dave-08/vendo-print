@@ -10,14 +10,12 @@ const CustomPage = ({
   const handlePageSelectionChange = (option) => {
     setSelectedPageOption(option);
     if (option !== "Custom") {
-    
       setCustomPageRange("");
     }
   };
 
   return (
     <div className="flex flex-col space-y-4 mt-6">
-
       <div className="flex items-center space-x-4">
         <p className="text-2xl font-bold text-[#31304D]">Pages:</p>
         <select
@@ -25,7 +23,7 @@ const CustomPage = ({
           value={selectedPageOption}
           onChange={(e) => handlePageSelectionChange(e.target.value)}
         >
-    <option value="All">
+          <option value="All">
             {totalPages > 1 ? `Pages ${totalPages}` : "All"}
           </option>
           <option value="Odd">Odd pages only</option>
@@ -34,7 +32,6 @@ const CustomPage = ({
         </select>
       </div>
 
- 
       {selectedPageOption === "Custom" && (
         <div className="flex flex-col space-y-2">
           <p className="text-lg font-bold text-[#31304D]">
@@ -53,4 +50,4 @@ const CustomPage = ({
   );
 };
 
-export default CustomPage;
+export default CustomPage; 

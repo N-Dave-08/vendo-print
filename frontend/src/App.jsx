@@ -6,7 +6,6 @@ import Xerox from "./Pages/Xerox";
 import Settings from "./Pages/Admin"; 
 import Usb from "./Pages/Usb"; 
 import QRUpload from "./Pages/Qr_Files";
-import BTUpload from "./Pages/Bluetooth_upload";
 import FileUpload from "./components/qr/file_upload";
 
 // Initialize GroupDocs license
@@ -18,7 +17,6 @@ const App = () => {
   return (
     <Router>
       <Routes>
-   
         <Route path="/" element={<Navigate to="/printer" replace />} />
         <Route path="/" element={<Layout />}>
           <Route path="/printer" element={<Printer />} />
@@ -26,7 +24,6 @@ const App = () => {
           <Route path="/settings" element={<Settings />} />
           <Route path="/usb" element={<Usb />} /> 
           <Route path ="/qr" element = {<QRUpload />} />
-          <Route path ="/bt-upload" element = {<BTUpload />} />
           <Route path ="/file-upload" element = {<FileUpload />} />
         </Route>
       </Routes>
