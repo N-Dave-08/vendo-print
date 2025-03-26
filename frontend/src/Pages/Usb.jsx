@@ -2,7 +2,6 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { FaArrowLeft } from "react-icons/fa";
 import { Printer, ArrowLeft, X } from "lucide-react";
-import { ezlogo } from "../assets/Icons";
 import MiniNav from "../components/MiniNav";
 
 import CustomPage from "../components/common/customized_page";
@@ -19,6 +18,8 @@ import { PDFDocument } from "pdf-lib";
 import mammoth from "mammoth";
 
 import { getPageIndicesToPrint } from "../utils/pageRanges";
+import Header from "../components/headers/Header";
+import ClientContainer from "../components/containers/ClientContainer";
 
 // Let's update the GroupDocs viewer URL function to ensure we get a proper view
 const getGroupDocsViewerUrl = (fileUrl) => {
@@ -487,13 +488,7 @@ const Usb = () => {
   };
 
   return (
-    <div className="p-4">
-      <div className="flex items-center space-x-4 mb-6">
-        <img src={ezlogo} alt="EZ Logo" className="w-16 h-16" />
-        <h1 className="text-4xl font-bold text-[#31304D]">
-          Kiosk Vendo Printer
-        </h1>
-      </div>
+    <ClientContainer>
 
       {/* Main Box Container */}
       <div className="flex flex-col w-full h-full bg-gray-200 rounded-lg shadow-md border-4 border-[#31304D] p-6 space-x-4 relative">
@@ -719,7 +714,7 @@ const Usb = () => {
           </button>
         </div>
       </div>
-    </div>
+    </ClientContainer>
   );
 };
 

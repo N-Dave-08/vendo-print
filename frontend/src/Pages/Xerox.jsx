@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FaArrowLeft, FaPrint } from 'react-icons/fa';
 import { ezlogo } from '../assets/Icons';
@@ -8,9 +8,11 @@ import SmartPriceToggle from "../components/xerox/smart_price";
 import { realtimeDb } from '../../firebase/firebase_config';
 import { getDatabase, ref as dbRef, get } from "firebase/database";
 import axios from "axios";
+import ClientContainer from '../components/containers/ClientContainer';
 
 const Xerox = () => {
   const navigate = useNavigate();
+  const userInitiatedRef = useRef(false);
 
   // File at Printer states
   const [filePreviewUrl, setFilePreviewUrl] = useState("");
@@ -39,6 +41,13 @@ const Xerox = () => {
   }, []);
 
   const handleScan = async () => {
+    // Only proceed if the user explicitly initiated the scan
+    if (!userInitiatedRef.current && event && event.type !== 'click') {
+      console.log('Preventing automatic scan');
+      return;
+    }
+
+    userInitiatedRef.current = false; // Reset the flag
     setIsLoading(true);
     setError("");
     setFilePreviewUrl("");
@@ -46,7 +55,7 @@ const Xerox = () => {
     try {
       // First check if scanner is available
       await axios.get('http://localhost:5000/api/xerox/check-scanner');
-      
+
       // Then get the preview
       const response = await axios.get('http://localhost:5000/api/xerox/preview', {
         responseType: 'blob'
@@ -60,6 +69,24 @@ const Xerox = () => {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Function to explicitly set user-initiated flag
+  const initiateUserScan = () => {
+    userInitiatedRef.current = true;
+    handleScan();
+  };
+
+  // Function to clear the scanned document
+  const clearScannedDocument = () => {
+    // Revoke object URL to prevent memory leaks
+    if (filePreviewUrl) {
+      URL.revokeObjectURL(filePreviewUrl);
+    }
+
+    setFilePreviewUrl("");
+    setCalculatedPrice(0);
+    setError("");
   };
 
   const handlePrint = async () => {
@@ -121,7 +148,7 @@ const Xerox = () => {
         // Small delay to ensure print dialog is fully closed
         setTimeout(async () => {
           cleanup();
-          
+
           // Update coins after print dialog is closed
           const coinRef = dbRef(realtimeDb, "coinCount/availableCoins");
           const snapshot = await get(coinRef);
@@ -149,13 +176,7 @@ const Xerox = () => {
   };
 
   return (
-    <div className="p-4">
-      <div className="flex items-center space-x-4 mb-6">
-        <img src={ezlogo} alt="EZ Logo" className="w-16 h-16" />
-        <h1 className="text-4xl font-bold text-[#31304D]">
-          Kiosk Vendo Printer
-        </h1>
-      </div>
+    <ClientContainer className="p-4">
 
       {/* Main Box Container */}
       <div className="flex flex-col w-full h-full bg-gray-200 rounded-lg shadow-md border-4 border-[#31304D] p-6 space-x-4 relative">
@@ -192,23 +213,40 @@ const Xerox = () => {
 
           {/* Right Side - Preview */}
           <div className="w-1/2">
-            <div className="bg-white rounded-lg p-4 h-full flex flex-col items-center justify-center">
+            <div className="bg-white rounded-lg p-4 h-full flex flex-col items-center justify-center relative">
               {error && (
                 <div className="text-red-500 mb-4 text-center">
                   {error}
                 </div>
               )}
               {filePreviewUrl ? (
-                <img
-                  src={filePreviewUrl}
-                  alt="Scanned Preview"
-                  className="max-w-full max-h-[400px] object-contain"
-                />
+                <>
+                  <img
+                    src={filePreviewUrl}
+                    alt="Scanned Preview"
+                    className="max-w-full max-h-[400px] object-contain"
+                  />
+                  <div className="mt-4 flex space-x-4">
+                    <button
+                      onClick={initiateUserScan}
+                      disabled={isLoading}
+                      className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
+                    >
+                      {isLoading ? "Scanning..." : "Scan Again"}
+                    </button>
+                    <button
+                      onClick={clearScannedDocument}
+                      className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </>
               ) : (
                 <div className="text-center text-gray-500">
                   <p className="mb-4">No document scanned yet</p>
                   <button
-                    onClick={handleScan}
+                    onClick={initiateUserScan}
                     disabled={isLoading}
                     className="px-4 py-2 bg-[#31304D] text-white rounded-lg hover:bg-opacity-90"
                   >
@@ -234,16 +272,15 @@ const Xerox = () => {
             <button
               onClick={handlePrint}
               disabled={!filePreviewUrl}
-              className={`w-40 py-3 bg-[#31304D] text-white text-lg font-bold rounded-lg mt-6 flex items-center justify-center ${
-                !filePreviewUrl ? 'opacity-50 cursor-not-allowed' : 'hover:bg-opacity-90'
-              }`}
+              className={`w-40 py-3 bg-[#31304D] text-white text-lg font-bold rounded-lg mt-6 flex items-center justify-center ${!filePreviewUrl ? 'opacity-50 cursor-not-allowed' : 'hover:bg-opacity-90'
+                }`}
             >
               Xerox <FaPrint className="ml-2 text-white" />
             </button>
           )}
         </div>
       </div>
-    </div>
+    </ClientContainer>
   );
 };
 

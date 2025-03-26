@@ -12,7 +12,7 @@ function Print() {
   const [dragActive, setDragActive] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState(null);
-  
+
   // Print options
   const [orientation, setOrientation] = useState("portrait");
   const [isColor, setIsColor] = useState(false);
@@ -32,7 +32,7 @@ function Print() {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    
+
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       validateAndSetFile(e.dataTransfer.files[0]);
     }
@@ -41,21 +41,21 @@ function Print() {
   // Validate file and set it
   const validateAndSetFile = (selectedFile) => {
     setError(null);
-    
+
     // Check file type
     if (!ALLOWED_FILE_TYPES.includes(selectedFile.type)) {
       setError("File type not supported. Please upload a PDF, Word document, or image file.");
       return;
     }
-    
+
     // Check file size (10MB max)
     if (selectedFile.size > 10 * 1024 * 1024) {
       setError("File too large. Maximum size is 10MB.");
       return;
     }
-    
+
     setFile(selectedFile);
-    
+
     // Create object URL for preview
     const fileUrl = URL.createObjectURL(selectedFile);
     setFilePreviewUrl(fileUrl);
@@ -75,7 +75,7 @@ function Print() {
       setError("Please select a file to print.");
       return;
     }
-    
+
     setShowPrintPreview(true);
   };
 
@@ -85,24 +85,24 @@ function Print() {
       setShowPrintPreview(false);
       return;
     }
-    
+
     // Update our options with user selections
     setOrientation(printSettings.orientation || orientation);
     setIsColor(printSettings.isColor !== undefined ? printSettings.isColor : isColor);
     setCopies(printSettings.copies || copies);
-    
+
     // In a real implementation, we would send these settings to the backend
     // along with the file to print
     console.log("Print completed with settings:", printSettings);
-    
+
     // Record the print job to the backend here
-    
+
     // Close the preview
     setShowPrintPreview(false);
-    
+
     // Show success message
     alert("Print job submitted successfully!");
-    
+
     // Reset form
     setFile(null);
     setFilePreviewUrl("");
@@ -110,7 +110,7 @@ function Print() {
 
   const calculateEstimatedCost = () => {
     if (!file) return 0;
-    
+
     const pagePrice = isColor ? PRICING.COLOR_PAGE : PRICING.BLACK_WHITE_PAGE;
     // Estimate page count based on file size (very rough estimate)
     const estimatedPages = Math.max(1, Math.ceil(file.size / (500 * 1024)));
@@ -120,15 +120,14 @@ function Print() {
   return (
     <div className="max-w-4xl mx-auto py-6">
       <MiniNav title="Print a Document" />
-      
+
       <div className="mt-6 bg-white rounded-lg shadow-md p-6">
         <h2 className="text-xl font-semibold mb-4">Upload File</h2>
-        
+
         {/* File Uploader */}
-        <div 
-          className={`border-2 border-dashed rounded-lg p-8 text-center ${
-            dragActive ? "border-primary bg-primary-50" : "border-gray-300 hover:border-primary"
-          }`}
+        <div
+          className={`border-2 border-dashed rounded-lg p-8 text-center ${dragActive ? "border-primary bg-primary-50" : "border-gray-300 hover:border-primary"
+            }`}
           onDragOver={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -187,7 +186,7 @@ function Print() {
             </div>
           )}
         </div>
-        
+
         {/* Error message */}
         {error && (
           <div className="mt-4 p-3 bg-red-50 text-red-700 rounded-md border border-red-200">
@@ -197,7 +196,7 @@ function Print() {
             </div>
           </div>
         )}
-        
+
         {/* File information and cost estimate */}
         {file && (
           <div className="mt-6 p-4 bg-gray-50 rounded-md">
@@ -215,7 +214,7 @@ function Print() {
           </div>
         )}
       </div>
-      
+
       {/* Print Preview Modal */}
       {showPrintPreview && (
         <PrintPreview

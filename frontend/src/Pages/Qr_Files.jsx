@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { FaArrowLeft, FaPrint, FaTimes } from "react-icons/fa";
+import { ezlogo } from "../assets/Icons";
 import { realtimeDb, storage } from "../../firebase/firebase_config";
 import { ref as dbRef, get, remove, update } from "firebase/database";
 import { ref as storageRef, deleteObject } from "firebase/storage";
@@ -162,16 +163,24 @@ const QRUpload = () => {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-white p-4 shadow-md flex items-center sticky top-0 z-10">
+      {/* Main Header with Logo */}
+      <div className="bg-white p-4 shadow-md flex items-center">
+        <img src={ezlogo} alt="EZ Logo" className="w-16 h-16 mr-4" />
+        <h1 className="text-4xl font-bold text-[#31304D]">
+          Kiosk Vendo Printer
+        </h1>
+      </div>
+
+      {/* Sub Header with Back Button and Page Title */}
+      <div className="bg-gray-200 p-4 flex items-center">
         <button
           onClick={() => navigate('/')}
-          className="text-gray-600 hover:text-[#31304D] mr-4 transition-colors p-2 rounded-full hover:bg-gray-100"
+          className="flex items-center justify-center w-10 h-10 bg-white text-[#31304D] border-2 border-[#31304D] rounded-lg mr-4"
           aria-label="Go back"
         >
           <FaArrowLeft size={20} />
         </button>
-        <h1 className="text-2xl font-bold text-[#31304D]">Print Document</h1>
+        <h2 className="text-2xl font-bold text-[#31304D]">Share files via QR</h2>
       </div>
 
       <div className="p-4 md:p-6 max-w-7xl mx-auto">
