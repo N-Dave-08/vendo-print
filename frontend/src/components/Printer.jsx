@@ -220,7 +220,7 @@ const cancelPrintJob = (fileId) => {
       
           <div 
             className="flex flex-col items-center cursor-pointer"
-            onClick={() => setIsModalOpen(true)}
+            onClick={() => navigate('/qr')}
           >
             <div className="w-full max-w-xs h-48 bg-gray-100 flex items-center justify-center text-xl font-bold rounded-lg border-4 border-[#31304D] shadow-md">
               <img src={vectorImage4} alt="Share files via QR" className="w-24 h-24" />
