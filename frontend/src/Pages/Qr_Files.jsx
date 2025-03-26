@@ -1,26 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { FaArrowLeft, FaPrint, FaTimes } from "react-icons/fa";
-import { ezlogo } from "../assets/Icons";
-
-import CustomPage from "../components/qr/customized_page";
-import DocumentPreview from "../components/qr/document_preview";
-import SmartPriceToggle from "../components/qr/smart_price";
-import PrinterList from "../components/qr/printerList";
-import PageOrientation from "../components/qr/page_orientation";
-import SelectColor from "../components/qr/select_color";
-import PageSize from "../components/qr/page_size";
-import Copies from "../components/qr/copies";
-
 import { realtimeDb, storage } from "../../firebase/firebase_config";
-import { getDatabase, ref as dbRef, push, get, update, remove } from "firebase/database";
-import { ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
+import { ref as dbRef, get, remove, update } from "firebase/database";
+import { ref as storageRef, deleteObject } from "firebase/storage";
 import { onValue } from "firebase/database";
-import axios from "axios";
-import { PDFDocument } from "pdf-lib";
-import mammoth from "mammoth";
-
-import { getPageIndicesToPrint } from "../utils/pageRanges";
 import M_Qrcode from "../components/M_Qrcode";
 
 const QRUpload = () => {
@@ -35,14 +19,49 @@ const QRUpload = () => {
     fileUrl: queryParams.get("url") || "",
     totalPages: parseInt(queryParams.get("pages")) || 1
   });
-
+  
   // Print settings
   const [selectedPrinter, setSelectedPrinter] = useState("");
   const [copies, setCopies] = useState(1);
-  const [pageSize, setPageSize] = useState("A4");
-  const [orientation, setOrientation] = useState("portrait");
   const [isColor, setIsColor] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  
+  // Balance and price
+  const [balance, setBalance] = useState(0);
+  const [price, setPrice] = useState(0);
+
+  // Fetch balance from Firebase
+  useEffect(() => {
+    const balanceRef = dbRef(realtimeDb, "coinCount/availableCoins");
+    const unsubscribe = onValue(balanceRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setBalance(snapshot.val());
+      } else {
+        setBalance(0);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Calculate price based on settings
+  useEffect(() => {
+    if (!selectedFile.fileName) {
+      setPrice(0);
+      return;
+    }
+
+    // Base price per page
+    const basePricePerPage = 5;
+    
+    // Color multiplier
+    const colorMultiplier = isColor ? 2 : 1;
+    
+    // Calculate total price
+    const calculatedPrice = basePricePerPage * selectedFile.totalPages * copies * colorMultiplier;
+    
+    setPrice(calculatedPrice);
+  }, [selectedFile, copies, isColor]);
 
   // Fetch uploaded files
   useEffect(() => {
@@ -101,228 +120,251 @@ const QRUpload = () => {
       return;
     }
 
-    if (!selectedPrinter) {
-      alert("Please select a printer");
+    if (balance < price) {
+      alert("Not enough balance to complete this print job");
       return;
     }
 
     setIsLoading(true);
     try {
-      // Add your print logic here
-      console.log("Printing file:", selectedFile);
-      // TODO: Implement print functionality
+      // Add to print queue
+      const printJobsRef = dbRef(realtimeDb, "files");
+      const newPrintJobRef = dbRef(realtimeDb, "files");
+      
+      // Add print job details
+      await update(newPrintJobRef, {
+        fileName: selectedFile.fileName,
+        fileUrl: selectedFile.fileUrl,
+        printerName: selectedPrinter || "default",
+        copies: copies,
+        isColor: isColor,
+        totalPages: selectedFile.totalPages,
+        price: price,
+        timestamp: new Date().toISOString(),
+        status: "Pending"
+      });
+      
+      // Update balance
+      const updatedBalance = balance - price;
+      await update(dbRef(realtimeDb, "coinCount"), { availableCoins: updatedBalance });
+      
+      // Show success message
+      setTimeout(() => {
+        setIsLoading(false);
+        alert("Print job sent successfully!");
+      }, 2000);
     } catch (error) {
       console.error("Print error:", error);
       alert("Failed to print. Please try again.");
-    } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-gray-100 p-6">
+    <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="flex items-center mb-6">
+      <div className="bg-white p-4 shadow-md flex items-center sticky top-0 z-10">
         <button
           onClick={() => navigate('/')}
-          className="text-gray-600 hover:text-gray-800 mr-4"
+          className="text-gray-600 hover:text-[#31304D] mr-4 transition-colors p-2 rounded-full hover:bg-gray-100"
+          aria-label="Go back"
         >
-          <FaArrowLeft size={24} />
+          <FaArrowLeft size={20} />
         </button>
-        <h1 className="text-2xl font-bold text-gray-800">Print Document</h1>
+        <h1 className="text-2xl font-bold text-[#31304D]">Print Document</h1>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Side - Settings */}
-        <div className="space-y-6">
-          {/* QR Code */}
-          <div className="bg-white rounded-lg shadow-md p-6 flex flex-col items-center">
-            <h2 className="text-xl font-bold text-gray-800 mb-4">Scan to Upload</h2>
-            <M_Qrcode />
-          </div>
-          
-          {/* Print Settings */}
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-xl font-bold text-gray-800 mb-4">Print Settings</h2>
-            
-            {/* Printer Selection */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Select Printer
-              </label>
-              <select
-                value={selectedPrinter}
-                onChange={(e) => setSelectedPrinter(e.target.value)}
-                className="w-full p-2 border rounded-lg"
-              >
-                <option value="">Choose a printer...</option>
-                <option value="printer1">Printer 1</option>
-                <option value="printer2">Printer 2</option>
-              </select>
-            </div>
-
-            {/* Copies */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Copies
-              </label>
-              <input
-                type="number"
-                min="1"
-                value={copies}
-                onChange={(e) => setCopies(parseInt(e.target.value))}
-                className="w-full p-2 border rounded-lg"
-              />
-            </div>
-
-            {/* Page Size */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Page Size
-              </label>
-              <select
-                value={pageSize}
-                onChange={(e) => setPageSize(e.target.value)}
-                className="w-full p-2 border rounded-lg"
-              >
-                <option value="A4">A4</option>
-                <option value="Letter">Letter</option>
-                <option value="Legal">Legal</option>
-              </select>
-            </div>
-
-            {/* Orientation */}
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Orientation
-              </label>
-              <div className="flex space-x-4">
-                <label className="flex items-center">
-                  <input
-                    type="radio"
-                    value="portrait"
-                    checked={orientation === "portrait"}
-                    onChange={(e) => setOrientation(e.target.value)}
-                    className="mr-2"
-                  />
-                  Portrait
-                </label>
-                <label className="flex items-center">
-                  <input
-                    type="radio"
-                    value="landscape"
-                    checked={orientation === "landscape"}
-                    onChange={(e) => setOrientation(e.target.value)}
-                    className="mr-2"
-                  />
-                  Landscape
-                </label>
-              </div>
-            </div>
-
-            {/* Color Option */}
-            <div className="mb-4">
-              <label className="flex items-center">
-                <input
-                  type="checkbox"
-                  checked={isColor}
-                  onChange={(e) => setIsColor(e.target.checked)}
-                  className="mr-2"
-                />
-                <span className="text-sm font-medium text-gray-700">Color Print</span>
-              </label>
-            </div>
-
-            <button
-              onClick={handlePrint}
-              disabled={!selectedFile.fileUrl || !selectedPrinter || isLoading}
-              className={`w-full py-3 px-4 rounded-lg font-bold flex items-center justify-center ${
-                !selectedFile.fileUrl || !selectedPrinter || isLoading
-                  ? "bg-gray-300 cursor-not-allowed"
-                  : "bg-blue-500 hover:bg-blue-600 text-white"
-              }`}
-            >
-              {isLoading ? (
-                <>
-                  <span className="animate-spin mr-2">⌛</span>
-                  Printing...
-                </>
-              ) : (
-                <>
-                  <FaPrint className="mr-2" />
-                  Print Document
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Middle - Preview */}
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-bold text-gray-800 mb-4">Document Preview</h2>
-          
-          {selectedFile.fileUrl ? (
-            <div className="h-[600px] mb-6">
-              <iframe
-                src={`https://docs.google.com/gview?url=${encodeURIComponent(
-                  selectedFile.fileUrl
-                )}&embedded=true`}
-                className="w-full h-full border-0 rounded-lg"
-                title="Document Preview"
-              />
-            </div>
-          ) : (
-            <div className="h-[600px] flex items-center justify-center bg-gray-50 rounded-lg">
-              <p className="text-gray-500">Select a file to preview</p>
-            </div>
-          )}
-        </div>
-
-        {/* Right Side - Uploaded Files */}
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-bold text-gray-800 mb-4">Uploaded Files</h2>
-          <div className="space-y-3 max-h-[600px] overflow-y-auto">
-            {uploadedFiles.length === 0 ? (
-              <p className="text-gray-500">No files uploaded yet</p>
-            ) : (
-              uploadedFiles.map((file) => (
-                <div
-                  key={file.id}
-                  className={`flex items-center justify-between p-3 rounded-lg transition-colors ${
-                    selectedFile.fileName === file.fileName
-                      ? "bg-blue-50 border border-blue-200"
-                      : "bg-gray-50 hover:bg-gray-100"
-                  }`}
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-gray-800 truncate">
-                      {file.fileName}
-                    </p>
-                    <p className="text-sm text-gray-500">
-                      Pages: {file.totalPages} • {new Date(file.uploadedAt).toLocaleDateString()}
-                    </p>
-                  </div>
-                  <div className="flex items-center space-x-2 ml-4">
-                    <button
-                      onClick={() => handleSelectFile(file)}
-                      className={`px-3 py-1 rounded transition-colors ${
-                        selectedFile.fileName === file.fileName
-                          ? "bg-blue-500 text-white"
-                          : "text-blue-500 hover:bg-blue-50"
-                      }`}
-                    >
-                      Select
-                    </button>
-                    <button
-                      onClick={() => handleDeleteFile(file.id, file.fileName)}
-                      className="text-red-500 hover:text-red-700 p-1"
-                    >
-                      <FaTimes />
-                    </button>
+      <div className="p-4 md:p-6 max-w-7xl mx-auto">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* Left Side - QR and Balance (1/3 width) */}
+          <div className="flex flex-col h-full space-y-6">
+            {/* QR Code Section */}
+            <div className="bg-white rounded-lg shadow-sm p-6">
+              <h2 className="text-xl font-bold text-[#31304D] mb-4">Scan here</h2>
+              <div className="border border-gray-200 rounded-lg p-6 relative">
+                <div className="absolute -top-3 left-0 right-0 text-center">
+                  <span className="bg-white px-3 text-sm text-gray-500 font-medium">
+                    Scan this QR Code to share files
+                  </span>
+                </div>
+                <div className="flex justify-center">
+                  <div className="w-56 h-56 flex items-center justify-center">
+                    <M_Qrcode />
                   </div>
                 </div>
-              ))
-            )}
+              </div>
+            </div>
+            
+            {/* Balance and Pricing */}
+            <div className="bg-white rounded-lg shadow-sm p-6 mt-auto">
+              <p className="text-xl font-bold text-[#31304D] mb-3">
+                Balance: <span className="text-green-500">{balance}</span> coins
+              </p>
+              
+              <p className="text-xl font-bold text-[#31304D]">
+                Smart Price: <span className="text-green-500">₱{price.toFixed(2)}</span>
+              </p>
+            </div>
+          </div>
+          
+          {/* Right Side - Uploaded Files and Print (2/3 width) */}
+          <div className="flex flex-col h-full md:col-span-2">
+            {/* Uploaded Files Section */}
+            <div className="bg-white rounded-lg shadow-sm p-6 mb-6 flex-grow">
+              <h2 className="text-xl font-bold text-[#31304D] mb-4 flex justify-between items-center">
+                <span>Uploaded files</span>
+                <span className="text-sm font-normal text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
+                  {uploadedFiles.length} {uploadedFiles.length === 1 ? 'file' : 'files'}
+                </span>
+              </h2>
+              
+              <div className="min-h-[400px]">
+                {uploadedFiles.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-full py-12">
+                    <div className="bg-gray-100 p-4 rounded-full mb-3">
+                      <svg className="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                      </svg>
+                    </div>
+                    <p className="text-gray-500 font-medium mb-1">No files uploaded yet</p>
+                    <p className="text-center text-gray-400 text-sm">
+                      Scan the QR code with your mobile device to upload files
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    {uploadedFiles.map((file) => (
+                      <div
+                        key={file.id}
+                        className={`flex flex-col items-center cursor-pointer p-2 ${
+                          selectedFile.fileName === file.fileName ? "bg-blue-50 rounded-lg" : ""
+                        }`}
+                        onClick={() => handleSelectFile(file)}
+                      >
+                        {/* File Icon */}
+                        <div className="mb-2 relative">
+                          {file.fileName.toLowerCase().endsWith('.pdf') ? (
+                            <div className="w-20 h-24 relative">
+                              <div className="absolute inset-0 bg-white border border-gray-200 rounded-sm shadow"></div>
+                              <div className="absolute left-0 top-0 w-12 h-12 bg-red-500 flex items-center justify-center">
+                                <span className="text-white font-bold text-2xl">P</span>
+                              </div>
+                              <div className="absolute right-0 top-5 w-8 h-8">
+                                <svg viewBox="0 0 24 24" className="w-full h-full text-red-300" fill="currentColor">
+                                  <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z" />
+                                </svg>
+                              </div>
+                            </div>
+                          ) : file.fileName.toLowerCase().endsWith('.pptx') ? (
+                            <div className="w-20 h-24 relative">
+                              <div className="absolute inset-0 bg-white border border-gray-200 rounded-sm shadow"></div>
+                              <div className="absolute left-0 top-0 w-12 h-12 bg-orange-500 flex items-center justify-center">
+                                <span className="text-white font-bold text-2xl">P</span>
+                              </div>
+                              <div className="absolute right-0 top-5 w-8 h-8">
+                                <svg viewBox="0 0 24 24" className="w-full h-full text-orange-300" fill="currentColor">
+                                  <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z" />
+                                </svg>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="w-20 h-24 relative">
+                              <div className="absolute inset-0 bg-white border border-gray-200 rounded-sm shadow"></div>
+                              <div className="absolute left-0 top-0 w-12 h-12 bg-blue-600 flex items-center justify-center">
+                                <span className="text-white font-bold text-2xl">W</span>
+                              </div>
+                              <div className="absolute right-4 bottom-3 flex flex-col items-start space-y-1">
+                                <div className="w-10 h-0.5 bg-blue-600"></div>
+                                <div className="w-10 h-0.5 bg-blue-600"></div>
+                                <div className="w-10 h-0.5 bg-blue-600"></div>
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* Delete Button - Top Right */}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteFile(file.id, file.fileName);
+                            }}
+                            className="absolute -top-2 -right-2 bg-white rounded-full w-6 h-6 flex items-center justify-center shadow-sm border border-gray-200 text-gray-400 hover:text-red-500"
+                            aria-label="Delete file"
+                          >
+                            <FaTimes size={12} />
+                          </button>
+                        </div>
+                        
+                        {/* File Name - Under Icon */}
+                        <div className="text-center w-full">
+                          <p className="text-sm font-medium text-gray-800 truncate">{file.fileName}</p>
+                          <p className="text-xs text-gray-500">
+                            {file.totalPages} {file.totalPages === 1 ? 'page' : 'pages'} • {new Date(file.uploadedAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            {/* Print Options and Button */}
+            <div className="bg-white rounded-lg shadow-sm p-6">
+              <div className="flex flex-wrap justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-[#31304D]">Print Options</h2>
+                
+                <div className="flex items-center space-x-6 my-2">
+                  <div className="flex items-center">
+                    <input
+                      id="color-print"
+                      type="checkbox"
+                      className="w-4 h-4 text-[#31304D] border-gray-300 rounded focus:ring-[#31304D]"
+                      checked={isColor}
+                      onChange={(e) => setIsColor(e.target.checked)}
+                    />
+                    <label htmlFor="color-print" className="ml-2 text-sm font-medium text-gray-700">Color</label>
+                  </div>
+                  
+                  <div className="flex items-center">
+                    <label htmlFor="copies" className="text-sm font-medium text-gray-700 mr-2">Copies:</label>
+                    <input
+                      id="copies"
+                      type="number"
+                      min="1"
+                      max="99"
+                      className="w-16 p-1 text-sm border border-gray-300 rounded-md"
+                      value={copies}
+                      onChange={(e) => setCopies(parseInt(e.target.value))}
+                    />
+                  </div>
+                </div>
+              </div>
+              
+              <button
+                onClick={handlePrint}
+                disabled={!selectedFile.fileName || isLoading}
+                className={`w-full py-3 flex items-center justify-center rounded-lg font-bold text-lg transition-all duration-200 ${
+                  !selectedFile.fileName || isLoading
+                    ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                    : "bg-[#31304D] hover:bg-[#41405D] text-white shadow-sm hover:shadow"
+                }`}
+              >
+                {isLoading ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Printing...
+                  </>
+                ) : (
+                  <>
+                    <FaPrint className="mr-2" />
+                    Print Document
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </div>
