@@ -2,7 +2,7 @@ import React from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
 
 const M_Qrcode = () => {
-  const qrUrl = `${window.location.origin}/file-upload`;
+  const qrUrl = `http://192.168.1.14:5173/file-upload`;
 
   return (
     <div className="flex flex-col items-center">

@@ -19,7 +19,7 @@ app.use(express.urlencoded({ limit: "Infinity", extended: true }));
 // }));
 
 app.use(cors({
-  origin: "http://localhost:5173",  
+  origin: ["http://localhost:5173", "http://192.168.1.14:5173"],  
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type"],
 }));
@@ -35,6 +35,6 @@ app.get("/", (req, res) => {
 });
 
 const PORT = process.env.PORT;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
 
 
