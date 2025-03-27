@@ -757,7 +757,7 @@ const Usb = () => {
                         className="w-4 h-4 text-primary border-gray-300 focus:ring-primary"
                       />
                       <span className="ml-2 text-sm font-medium text-gray-700">Colored</span>
-                    </label>asdasd
+                    </label>
                     <label className="flex items-center">
                       <input
                         type="radio"
