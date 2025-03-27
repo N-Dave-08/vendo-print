@@ -2,16 +2,38 @@
 import express from 'express';
 import { addData, getData } from '../controller/firebase_controller.js';
 // I-import natin ang mga handler na bagong pangalan
-import { getPrintersHandler, printFileHandler } from '../printer/printer_controller.js';
+import {
+  getPrintersHandler,
+  printFileHandler,
+  getPrinterCapabilitiesHandler,
+  testPrinterConnectivityHandler
+} from '../printer/printer_controller.js';
 import { scanWithWIA, copyHandler, checkScanner } from '../printer/copy_controller.js';
 import path from 'path';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
+import multer from 'multer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = path.join(path.dirname(__dirname), 'uploads');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    cb(null, `${Date.now()}-${file.originalname}`);
+  }
+});
+
+const upload = multer({ storage });
 
 const BackendRoutes = express.Router();
 
@@ -25,7 +47,9 @@ BackendRoutes.get('/get-files', getData);
 
 // Printer Routes
 BackendRoutes.get('/printers', getPrintersHandler);
-BackendRoutes.post('/print', printFileHandler);
+BackendRoutes.get('/printers/:printerName/capabilities', getPrinterCapabilitiesHandler);
+BackendRoutes.get('/printers/:printerName/test', testPrinterConnectivityHandler);
+BackendRoutes.post('/print', upload.single('file'), printFileHandler);
 BackendRoutes.post('/xerox', copyHandler);
 
 // Scanner Routes

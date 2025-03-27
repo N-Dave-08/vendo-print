@@ -37,7 +37,8 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
   const [printSettings, setPrintSettings] = useState({
     copies: printOptions.copies || 1,
     isColor: printOptions.isColor || false,
-    orientation: printOptions.orientation || "portrait"
+    orientation: printOptions.orientation || "portrait",
+    paperSize: printOptions.paperSize || "a4"
   });
   const iframeRef = useRef(null);
 
@@ -82,45 +83,55 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
     setPrintSettings({ ...printSettings, orientation: e.target.value });
   };
 
+  const handlePaperSizeChange = (e) => {
+    setPrintSettings({ ...printSettings, paperSize: e.target.value });
+  };
+
   const handlePrinterChange = (e) => {
     setPrinterName(e.target.value);
   };
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     try {
-      // Create a temporary iframe to print the document with applied settings
-      const printFrame = document.createElement("iframe");
-      printFrame.style.display = "none";
-      document.body.appendChild(printFrame);
+      setLoading(true);
 
-      printFrame.onload = () => {
-        try {
-          // Apply print settings
-          const printContent = printFrame.contentWindow;
-          printContent.focus();
-          printContent.print();
+      // Create a FormData object to send the file and settings to the backend
+      const formData = new FormData();
 
-          // Remove the frame after printing
-          setTimeout(() => {
-            document.body.removeChild(printFrame);
-            // Show success message
-            setPrintSuccess(true);
-            // Close after showing success
-            setTimeout(() => {
-              // Return settings to parent component
-              onClose(printSettings);
-            }, 1500);
-          }, 500);
-        } catch (error) {
-          console.error("Error during print process:", error);
-          document.body.removeChild(printFrame);
-        }
-      };
+      // Get the blob from the blobUrl
+      const response = await fetch(blobUrl);
+      const blob = await response.blob();
 
-      // Set the iframe source to our blob URL
-      printFrame.src = blobUrl;
+      // Append the file and print settings
+      formData.append('file', blob, 'document.pdf');
+      formData.append('printerName', printerName || 'EPSON L3210 Series');
+      formData.append('isColor', printSettings.isColor);
+      formData.append('copies', printSettings.copies);
+      formData.append('orientation', printSettings.orientation);
+      formData.append('paperSize', printSettings.paperSize);
+
+      // Call the backend API to handle the print job
+      const printResponse = await fetch('/api/print', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!printResponse.ok) {
+        throw new Error('Print job failed');
+      }
+
+      // Show success message
+      setPrintSuccess(true);
+
+      // Close after showing success
+      setTimeout(() => {
+        // Return settings to parent component
+        onClose(printSettings);
+      }, 1500);
     } catch (error) {
       console.error("Error printing document:", error);
+      alert("Failed to print document. Please try again.");
+      setLoading(false);
     }
   };
 
@@ -191,6 +202,19 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
             </div>
 
             <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Paper Size</label>
+              <select
+                value={printSettings.paperSize}
+                onChange={handlePaperSizeChange}
+                className="w-full px-3 py-2 border rounded-md"
+              >
+                <option value="short-bond">Short Bond (8.5 x 11 in)</option>
+                <option value="a4">A4 (210 x 297 mm)</option>
+                <option value="long-bond">Long Bond (8.5 x 14 in)</option>
+              </select>
+            </div>
+
+            <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-1">Printer</label>
               <select
                 value={printerName}
@@ -240,7 +264,7 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
         {/* Footer */}
         <div className="p-4 border-t flex justify-between items-center">
           <div className="text-sm text-gray-500">
-            {!loading && !printSuccess && `${printSettings.copies} ${printSettings.copies > 1 ? 'copies' : 'copy'}, ${printSettings.isColor ? 'Color' : 'Black & White'}, ${printSettings.orientation}`}
+            {!loading && !printSuccess && `${printSettings.copies} ${printSettings.copies > 1 ? 'copies' : 'copy'}, ${printSettings.isColor ? 'Color' : 'Black & White'}, ${printSettings.orientation}, ${printSettings.paperSize === 'a4' ? 'A4' : printSettings.paperSize === 'long-bond' ? 'Long Bond' : 'Short Bond'}`}
           </div>
           <div className="flex space-x-2">
             <button

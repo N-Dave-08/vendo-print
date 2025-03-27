@@ -22,10 +22,9 @@ const PageSize = ({ selectedSize, setSelectedSize }) => {
           value={selectedSize}
           onChange={(e) => handleSizeChange(e.target.value)}
         >
-          <option value="Letter 8.5 x 11">Letter 8.5 x 11</option>
-          <option value="A4 8.3 x 11.7">A4 8.3 x 11.7</option>
-          <option value="Legal 8.5 x 14">Legal 8.5 x 14</option>
-          <option value="Executive 7.25 x 10.5">Executive 7.25 x 10.5</option>
+          <option value="Short Bond">Short Bond (8.5 x 11)</option>
+          <option value="A4">A4 (8.3 x 11.7)</option>
+          <option value="Long Bond">Long Bond (8.5 x 14)</option>
           <option value="Tabloid 11 x 17">Tabloid 11 x 17</option>
           <option value="Statement 5.5 x 8.5">Statement 5.5 x 8.5</option>
           <option value="B5 6.9 x 9.8">B5 6.9 x 9.8</option>

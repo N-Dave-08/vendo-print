@@ -5,7 +5,6 @@ const PrinterList = ({ selectedPrinter, setSelectedPrinter }) => {
   const [printers, setPrinters] = useState([]);
   const [error, setError] = useState(null);
 
-
   useEffect(() => {
     axios
       .get("http://localhost:5000/api/printers")
@@ -19,27 +18,24 @@ const PrinterList = ({ selectedPrinter, setSelectedPrinter }) => {
   }, []);
 
   return (
-    <div className="p-6">
-      {error && <p className="text-red-500">{error}</p>}
-
-      <div className="flex flex-col space-y-4">
-        <select
-          value={selectedPrinter}
-          onChange={(e) => setSelectedPrinter(e.target.value)}
-          className="w-64 p-2 border-2 border-[#31304D] rounded-lg text-lg font-bold text-[#31304D]"
-        >
-          <option value="">Select a printer...</option>
-          {Array.isArray(printers) && printers.length > 0 ? (
-            printers.map((printer, index) => (
-              <option key={index} value={printer.name}>
-                {printer.name}
-              </option>
-            ))
-          ) : (
-            <option value="">No printers available</option>
-          )}
-        </select>
-      </div>
+    <div>
+      {error && <p className="text-red-500 text-sm mt-1">{error}</p>}
+      <select
+        value={selectedPrinter}
+        onChange={(e) => setSelectedPrinter(e.target.value)}
+        className="w-full px-3 py-2 border rounded-md bg-white text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
+      >
+        <option value="">Select a printer...</option>
+        {Array.isArray(printers) && printers.length > 0 ? (
+          printers.map((printer, index) => (
+            <option key={index} value={printer.name}>
+              {printer.name}
+            </option>
+          ))
+        ) : (
+          <option value="">No printers available</option>
+        )}
+      </select>
     </div>
   );
 };

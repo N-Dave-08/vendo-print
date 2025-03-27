@@ -19,11 +19,36 @@ app.use(express.urlencoded({ limit: "Infinity", extended: true }));
 // }));
 
 app.use(cors({
-  origin: ["http://localhost:5173", "http://192.168.1.14:5173"],  
+  origin: ["http://localhost:5173", "http://192.168.1.14:5173"],
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type"],
 }));
 
+// Request logger middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  console.log(`📥 ${req.method} ${req.url} - Request received`);
+
+  // Log request body for POST/PUT requests
+  if ((req.method === 'POST' || req.method === 'PUT') && req.body) {
+    // Don't log full file data if present
+    const sanitizedBody = { ...req.body };
+    if (sanitizedBody.fileUrl) {
+      sanitizedBody.fileUrl = '[FILE URL REDACTED FOR LOGGING]';
+    }
+    console.log(`📦 Request body: ${JSON.stringify(sanitizedBody)}`);
+  }
+
+  // Track response
+  const originalSend = res.send;
+  res.send = function (data) {
+    const duration = Date.now() - start;
+    console.log(`📤 ${req.method} ${req.url} - Response sent (${res.statusCode}) [${duration}ms]`);
+    return originalSend.apply(res, arguments);
+  };
+
+  next();
+});
 
 // app.use(cors)
 
@@ -35,6 +60,6 @@ app.get("/", (req, res) => {
 });
 
 const PORT = process.env.PORT;
-app.listen(PORT, "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server running on port ${PORT}`));
 
 

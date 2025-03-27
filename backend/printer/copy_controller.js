@@ -4,7 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 
-import { printFileWithSumatra } from './printer_controller.js'; 
+import { printFileWithSumatra } from './printer_controller.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,8 +31,8 @@ export const checkScanner = () => {
         exit 1
       }
     `;
-    
-    exec(`powershell.exe -NoProfile -Command "${checkScript}"`, 
+
+    exec(`powershell.exe -NoProfile -Command "${checkScript}"`,
       { timeout: 10000 }, // 10 second timeout
       (error, stdout, stderr) => {
         if (error) {
@@ -42,14 +42,14 @@ export const checkScanner = () => {
           console.log('Scanner check output:', stdout);
           resolve(stdout);
         }
-    });
+      });
   });
 };
 
 export const scanWithWIA = (outputPath) => {
   console.log('Starting scan with WIA...');
   console.log('Output path:', outputPath);
-  
+
   return new Promise((resolve, reject) => {
     // Create directory if it doesn't exist
     const dir = path.dirname(outputPath);
@@ -57,7 +57,7 @@ export const scanWithWIA = (outputPath) => {
       console.log(`Creating directory: ${dir}`);
       fs.mkdirSync(dir, { recursive: true });
     }
-    
+
     // Log directory access permissions
     try {
       fs.accessSync(dir, fs.constants.W_OK);
@@ -65,9 +65,9 @@ export const scanWithWIA = (outputPath) => {
     } catch (err) {
       console.error(`Directory ${dir} is not writable:`, err);
     }
-    
+
     const escapedPath = outputPath.replace(/\\/g, '\\\\');
-    
+
     // Simplified script - focus on just making a successful scan
     const scanScript = `
       try {
@@ -110,17 +110,17 @@ export const scanWithWIA = (outputPath) => {
         exit 1
       }
     `;
-    
+
     // Create a temporary file for the PowerShell script
     const scriptPath = path.join(dir, `scan_script_${Date.now()}.ps1`);
     fs.writeFileSync(scriptPath, scanScript);
     console.log(`Created script file: ${scriptPath}`);
-    
+
     // Execute the script file directly instead of passing command inline
     console.log('Executing PowerShell script...');
     const command = `powershell.exe -ExecutionPolicy Bypass -File "${scriptPath}"`;
     console.log('Command:', command);
-    
+
     const process = exec(command, { timeout: 60000 }, (error, stdout, stderr) => {
       // Clean up the script file
       try {
@@ -131,13 +131,13 @@ export const scanWithWIA = (outputPath) => {
       } catch (e) {
         console.error('Error cleaning up script file:', e);
       }
-      
+
       if (error) {
         console.error('Scan error:', stderr);
         reject(new Error(stderr || 'Failed to scan'));
         return;
       }
-      
+
       // Wait 2 seconds to ensure file has been saved
       setTimeout(() => {
         if (fs.existsSync(outputPath)) {
@@ -156,15 +156,15 @@ export const scanWithWIA = (outputPath) => {
         }
       }, 2000);
     });
-    
+
     process.stdout.on('data', (data) => {
       console.log('PowerShell output:', data);
     });
-    
+
     process.stderr.on('data', (data) => {
       console.error('PowerShell error:', data);
     });
-    
+
     process.on('exit', (code) => {
       console.log(`PowerShell process exited with code ${code}`);
     });
@@ -174,19 +174,19 @@ export const scanWithWIA = (outputPath) => {
 export const copyHandler = async (req, res) => {
   console.log('Starting copy operation...');
   let outputPath = null;
-  
+
   try {
     const { printerName } = req.body;
     if (!printerName) {
-      return res.status(400).json({ 
-        status: 'error', 
-        message: 'Missing printerName in request body.' 
+      return res.status(400).json({
+        status: 'error',
+        message: 'Missing printerName in request body.'
       });
     }
 
     console.log('Checking scanner availability...');
     await checkScanner();
-    
+
     const scansDir = path.join(__dirname, 'scans');
     if (!fs.existsSync(scansDir)) {
       console.log('Creating scans directory...');
@@ -219,10 +219,10 @@ export const copyHandler = async (req, res) => {
       status: 'success',
       message: 'Copy operation completed (scan + print).',
     });
-    
+
   } catch (error) {
     console.error('Error during copy operation:', error);
-    
+
     // Clean up on error
     if (outputPath && fs.existsSync(outputPath)) {
       try {
@@ -231,10 +231,10 @@ export const copyHandler = async (req, res) => {
         console.error('Error during cleanup:', cleanupError);
       }
     }
-    
-    return res.status(500).json({ 
-      status: 'error', 
-      message: error.message || 'Failed to process copy operation.' 
+
+    return res.status(500).json({
+      status: 'error',
+      message: error.message || 'Failed to process copy operation.'
     });
   }
 };

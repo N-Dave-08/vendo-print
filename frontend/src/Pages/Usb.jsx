@@ -7,7 +7,7 @@ import MiniNav from "../components/MiniNav";
 import CustomPage from "../components/common/customized_page";
 import DocumentPreview from "../components/common/document_preview";
 import SmartPriceToggle from "../components/common/smart_price";
-import PrintPreview from "../components/PrintPreview";
+import PrinterList from "../components/usb/printerList";
 
 import { realtimeDb, storage } from "../../firebase/firebase_config";
 import { ref as dbRef, push, get, update, set } from "firebase/database";
@@ -45,7 +45,7 @@ const Usb = () => {
   const [filePreviewUrl, setFilePreviewUrl] = useState("");
   const [fileToUpload, setFileToUpload] = useState(null);
   const [copies, setCopies] = useState(1);
-  const [selectedSize, setSelectedSize] = useState("Letter 8.5 x 11");
+  const [selectedSize, setSelectedSize] = useState("Short Bond");
   const [isColor, setIsColor] = useState(false);
   const [orientation, setOrientation] = useState("portrait");
   const [selectedPageOption, setSelectedPageOption] = useState("All");
@@ -55,7 +55,10 @@ const Usb = () => {
   const [calculatedPrice, setCalculatedPrice] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [availableCoins, setAvailableCoins] = useState(0);
-  const [showPrintPreview, setShowPrintPreview] = useState(false);
+
+  // Add print status state
+  const [printStatus, setPrintStatus] = useState("");
+  const [printProgress, setPrintProgress] = useState(0);
 
   // Guide modal state
   const [showModal, setShowModal] = useState(false);
@@ -63,6 +66,8 @@ const Usb = () => {
   // Add a state variable to track if we're using an external viewer
   const [useExternalViewer, setUseExternalViewer] = useState(false);
   const [externalViewerUrl, setExternalViewerUrl] = useState("");
+
+  const [selectedPrinter, setSelectedPrinter] = useState("");
 
   useEffect(() => {
     setShowModal(true);
@@ -289,135 +294,210 @@ const Usb = () => {
     }
   };
 
-  // Update the handlePrint function to go directly to browser print dialog
+  // Update the handlePrint function to use our custom settings and send them to the backend
   const handlePrint = async () => {
-    setIsLoading(true);
-
     if (!fileToUpload) {
-      alert("No file selected! Please upload a file before printing.");
-      setIsLoading(false);
+      alert("Please select a file to print first.");
       return;
     }
 
-    // Check if user has enough coins
-    const coinRef = dbRef(realtimeDb, "coinCount");
+    if (!selectedPrinter) {
+      alert("Please select a printer first.");
+      return;
+    }
+
+    setIsLoading(true);
+    setPrintStatus("Initializing print job...");
+    setPrintProgress(10);
+
+    if (availableCoins < calculatedPrice) {
+      setIsLoading(false);
+      setPrintStatus("");
+      setPrintProgress(0);
+      alert(`Insufficient coins. Please insert ${calculatedPrice - availableCoins} more coins.`);
+      return;
+    }
+
     try {
-      const snapshot = await get(coinRef);
-      if (snapshot.exists()) {
-        const coins = snapshot.val().availableCoins;
-        setAvailableCoins(coins);
-        if (coins < calculatedPrice) {
-          alert("Not enough coins to proceed with printing.");
-          setIsLoading(false);
-          return;
-        }
-      } else {
-        alert("Error retrieving available coins.");
-        setIsLoading(false);
-        return;
+      // Get the selected pages based on page options
+      setPrintStatus("Processing document...");
+      setPrintProgress(20);
+
+      const pagesToPrint = getPageIndicesToPrint({
+        totalPages,
+        selectedPageOption,
+        customPageRange,
+      });
+
+      // Get file extension
+      const fileName = fileToUpload.name;
+      const fileExtension = fileName.split('.').pop().toLowerCase();
+
+      setPrintStatus("Preparing printer settings...");
+      setPrintProgress(30);
+
+      // Create the print job object with all settings
+      const printJob = {
+        fileName: fileName,
+        fileUrl: filePreviewUrl,
+        printerName: selectedPrinter,
+        copies: copies,
+        selectedSize,
+        isColor,
+        orientation,
+        selectedPageOption,
+        customPageRange,
+        totalPages,
+        price: calculatedPrice,
+        // Add additional properties that might help with debugging
+        fileType: fileExtension,
+        timestamp: new Date().toISOString()
+      };
+
+      // Add special handling for specific file types
+      if (['doc', 'docx'].includes(fileExtension)) {
+        // For Word documents, inform the user about enhanced printing
+        setPrintStatus("Using enhanced Word document printing...");
+        console.log("📄 Using enhanced Word document printing capabilities");
+      } else if (fileExtension === 'pdf') {
+        // For PDFs, apply specific settings
+        setPrintStatus("Configuring PDF settings...");
+        console.log("📑 Applying PDF-specific print settings");
       }
-    } catch (error) {
-      console.error("Error fetching available coins:", error);
-      alert("Error fetching available coins.");
-      setIsLoading(false);
-      return;
-    }
 
-    // Record the print job
-    const recorded = await recordPrintJob();
-    if (!recorded) {
-      setIsLoading(false);
-      return;
-    }
+      console.log('🖨️ Print request initiated with data:', {
+        fileName: fileToUpload.name,
+        printerName: selectedPrinter,
+        copies,
+        selectedSize,
+        isColor,
+        orientation,
+        selectedPageOption,
+        totalPages,
+        price: calculatedPrice,
+        fileType: fileExtension
+      });
 
-    try {
-      // Create a hidden iframe for printing
-      const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      document.body.appendChild(iframe);
+      console.log('🔗 File URL:', filePreviewUrl);
 
-      // Check if file is a Word document
-      const isWordDoc = fileToUpload.name.toLowerCase().endsWith('.docx') ||
-        fileToUpload.name.toLowerCase().endsWith('.doc');
+      const apiUrl = 'http://localhost:5000/api/print';
+      console.log(`📡 Sending POST request to: ${apiUrl}`);
+      console.log('📦 Request body:', JSON.stringify(printJob, null, 2));
 
-      if (isWordDoc) {
+      setPrintStatus("Sending to printer...");
+      setPrintProgress(50);
+
+      // Send print job to backend with retry mechanism
+      let response;
+      let retryCount = 0;
+      const maxRetries = 2;
+
+      while (retryCount <= maxRetries) {
         try {
-          // For Word documents, use mammoth to convert and print
-          const arrayBuffer = await fileToUpload.arrayBuffer();
-          const result = await mammoth.convertToHtml({ arrayBuffer });
-          const htmlContent = result.value;
+          response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(printJob)
+          });
 
-          // Write content to iframe
-          iframe.contentDocument.write(`
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <title>${fileToUpload.name}</title>
-                <style>
-                  body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
-                  img { max-width: 100%; }
-                </style>
-              </head>
-              <body>
-                ${htmlContent}
-              </body>
-            </html>
-          `);
-          iframe.contentDocument.close();
+          if (response.ok) break;
 
-          // Print the iframe content
-          iframe.contentWindow.print();
-        } catch (error) {
-          console.error("Error converting Word document:", error);
-          alert("Error converting Word document. Please try another option.");
-          setIsLoading(false);
-          return;
-        }
-      } else {
-        // For PDFs, images and other files, create an iframe with the file URL
-        iframe.onload = function () {
-          // Print once the iframe is loaded
-          iframe.contentWindow.print();
-        };
+          // If we're here, the response wasn't ok
+          retryCount++;
+          setPrintStatus(`Retry attempt ${retryCount}...`);
+          console.log(`Retry attempt ${retryCount} of ${maxRetries}`);
 
-        // Set the source based on file type
-        if (filePreviewUrl.toLowerCase().endsWith('.pdf')) {
-          iframe.src = filePreviewUrl + '#toolbar=0&navpanes=0&scrollbar=0';
-        } else {
-          // For images and other content
-          iframe.contentDocument.write(`
-            <!DOCTYPE html>
-            <html>
-              <head>
-                <title>${fileToUpload.name}</title>
-                <style>
-                  body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; }
-                  img { max-width: 100%; max-height: 100vh; }
-                </style>
-              </head>
-              <body>
-                <img src="${filePreviewUrl}" alt="${fileToUpload.name}" />
-              </body>
-            </html>
-          `);
-          iframe.contentDocument.close();
+          if (retryCount <= maxRetries) {
+            // Wait before retrying (exponential backoff)
+            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, retryCount)));
+          }
+        } catch (fetchError) {
+          console.error("Fetch error:", fetchError);
+          retryCount++;
+          setPrintStatus(`Connection error, retrying...`);
 
-          // Print immediately for images
-          setTimeout(() => {
-            iframe.contentWindow.print();
-          }, 500);
+          if (retryCount <= maxRetries) {
+            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, retryCount)));
+          } else {
+            throw fetchError;
+          }
         }
       }
 
-      // Clean up the iframe after printing
+      if (!response || !response.ok) {
+        throw new Error(`Print failed after ${retryCount} retries. Server returned ${response?.status || 'unknown'}`);
+      }
+
+      console.log(`🔄 Response status: ${response.status} ${response.statusText}`);
+      setPrintProgress(70);
+      setPrintStatus("Processing print job...");
+
+      const responseData = await response.json().catch(e => null);
+      console.log('📥 Response data:', responseData);
+
+      // Special handling for Word documents
+      if (['doc', 'docx'].includes(fileExtension)) {
+        console.log('Word document detected, checking print result...');
+        setPrintStatus("Verifying Word document print job...");
+
+        if (responseData?.details?.results) {
+          const results = responseData.details.results;
+          console.log('Print results:', results);
+
+          // Check if any of the print methods succeeded
+          const anySuccess = results.some(r =>
+            r.result &&
+            (r.result.includes('success') ||
+              r.result.includes('sent to printer') ||
+              r.result.includes('Print command sent'))
+          );
+
+          if (!anySuccess && responseData.success) {
+            console.warn('Server reported success but no successful print results found');
+            setPrintStatus("Print job sent but verification uncertain");
+          } else if (anySuccess) {
+            setPrintStatus("Print job verified successfully!");
+          }
+        }
+      }
+
+      setPrintProgress(80);
+      setPrintStatus("Recording transaction...");
+
+      // Record the print job in Firebase
+      console.log('📝 Recording print job in Firebase...');
+      await recordPrintJob();
+
+      // Update coins after successful print
+      const updatedCoins = availableCoins - calculatedPrice;
+      console.log(`💰 Updating coins from ${availableCoins} to ${updatedCoins}`);
+      await update(dbRef(realtimeDb, "coinCount"), {
+        availableCoins: updatedCoins
+      });
+      setAvailableCoins(updatedCoins);
+
+      setPrintProgress(100);
+      setPrintStatus("Print job completed successfully!");
+
+      // Show success message
+      alert("Print job submitted successfully!");
+
+      // Reset form
       setTimeout(() => {
-        document.body.removeChild(iframe);
+        setFileToUpload(null);
+        setFilePreviewUrl("");
         setIsLoading(false);
-      }, 2000);
+        setPrintStatus("");
+        setPrintProgress(0);
+      }, 2000); // Give user time to see the success status
 
     } catch (error) {
-      console.error("Error printing document:", error);
-      alert("Error printing document. Please try again later.");
+      console.error("❌ Error printing document:", error);
+      setPrintStatus("Print job failed: " + error.message);
+      setPrintProgress(0);
+      alert(`Error printing document: ${error.message}`);
       setIsLoading(false);
     }
   };
@@ -427,12 +507,10 @@ const Usb = () => {
     try {
       // Record the print job in Firebase
       const printJobsRef = dbRef(realtimeDb, "files");
-      const printerName = "Browser Print Dialog";
-      console.log("Selected printer:", printerName);
       await push(printJobsRef, {
         fileName: fileToUpload?.name,
         fileUrl: filePreviewUrl,
-        printerName: printerName,
+        printerName: selectedPrinter,
         copies: copies,
         paperSize: selectedSize,
         isColor: isColor,
@@ -442,7 +520,7 @@ const Usb = () => {
         totalPages: totalPages,
         finalPrice: calculatedPrice,
         timestamp: new Date().toISOString(),
-        status: "Completed"
+        status: "Pending"
       });
 
       // Deduct coins
@@ -490,7 +568,6 @@ const Usb = () => {
 
   return (
     <ClientContainer>
-
       {/* Main Box Container */}
       <div className="flex flex-col w-full h-full bg-gray-200 rounded-lg shadow-md border-4 border-[#31304D] p-6 space-x-4 relative">
         {/* Top Section */}
@@ -507,7 +584,7 @@ const Usb = () => {
               <p className="text-3xl font-bold text-[#31304D]">USB</p>
             </div>
 
-            {/* Rest of the content */}
+            {/* File Upload Section */}
             <div className="mt-6 space-y-4">
               {showModal && (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -593,80 +670,171 @@ const Usb = () => {
                 </div>
               )}
 
-              {/* Print Preview Modal */}
-              {showPrintPreview && (
-                <PrintPreview
-                  fileName={fileToUpload?.name}
-                  fileUrl={filePreviewUrl}
-                  fileToUpload={fileToUpload}
-                  copies={copies}
-                  pageSize={selectedSize}
-                  isColor={isColor}
-                  orientation={orientation}
-                  pageOption={selectedPageOption}
-                  customRange={customPageRange}
-                  onClose={() => setShowPrintPreview(false)}
-                  isPrinting={isLoading}
-                />
-              )}
-
-              <div className="flex flex-col space-y-4">
-                <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200">
-                  <h2 className="text-xl font-bold text-primary mb-4 flex items-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                      <polyline points="14 2 14 8 20 8"></polyline>
-                      <line x1="16" y1="13" x2="8" y2="13"></line>
-                      <line x1="16" y1="17" x2="8" y2="17"></line>
-                      <polyline points="10 9 9 9 8 9"></polyline>
-                    </svg>
-                    Choose File
-                  </h2>
-                  <div className="relative">
-                    <input
-                      type="file"
-                      onChange={handleFileSelect}
-                      className="w-full border-2 border-gray-300 rounded p-2 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-primary file:text-white hover:file:bg-primary-dark"
-                    />
-                    {fileToUpload && (
-                      <div className="mt-2 text-sm text-gray-600">
-                        Selected: <span className="font-medium">{fileToUpload.name}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200">
-                  <div className="flex justify-between items-center mb-4">
-                    <div className="text-right">
-                      <p className="font-bold text-gray-700 text-xl">
-                        Balance: <span className="text-green-600">{availableCoins}</span> coins
-                      </p>
+              <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200">
+                <h2 className="text-xl font-bold text-primary mb-4 flex items-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <polyline points="10 9 9 9 8 9"></polyline>
+                  </svg>
+                  Choose File
+                </h2>
+                <div className="relative">
+                  <input
+                    type="file"
+                    onChange={handleFileSelect}
+                    className="w-full border-2 border-gray-300 rounded p-2 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-primary file:text-white hover:file:bg-primary-dark"
+                  />
+                  {fileToUpload && (
+                    <div className="mt-2 text-sm text-gray-600">
+                      Selected: <span className="font-medium">{fileToUpload.name}</span>
                     </div>
-                  </div>
+                  )}
+                </div>
+              </div>
 
-                  <SmartPriceToggle
-                    paperSize={selectedSize}
-                    isColor={isColor}
-                    copies={copies}
-                    totalPages={totalPages}
-                    setTotalPages={setTotalPages}
-                    isSmartPriceEnabled={isSmartPriceEnabled}
-                    setIsSmartPriceEnabled={setIsSmartPriceEnabled}
-                    calculatedPrice={calculatedPrice}
-                    setCalculatedPrice={setCalculatedPrice}
-                    selectedPageOption={selectedPageOption}
-                    setSelectedPageOption={setSelectedPageOption}
-                    customPageRange={customPageRange}
-                    setCustomPageRange={setCustomPageRange}
-                    filePreviewUrl={filePreviewUrl}
+              {/* Print Settings Section */}
+              <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200">
+                <h2 className="text-xl font-bold text-primary mb-4">Print Settings</h2>
+
+                {/* Printer Selection */}
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select Printer
+                  </label>
+                  <PrinterList
+                    selectedPrinter={selectedPrinter}
+                    setSelectedPrinter={setSelectedPrinter}
                   />
                 </div>
+
+                {/* Copies */}
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Copies
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={copies}
+                    onChange={(e) => setCopies(parseInt(e.target.value))}
+                    className="w-full px-3 py-2 border rounded-md bg-white text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                </div>
+
+                {/* Paper Size */}
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Paper Size
+                  </label>
+                  <select
+                    value={selectedSize}
+                    onChange={(e) => setSelectedSize(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-md bg-white text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="Short Bond">Short Bond (8.5 x 11)</option>
+                    <option value="A4">A4 (8.3 x 11.7)</option>
+                    <option value="Long Bond">Long Bond (8.5 x 14)</option>
+                  </select>
+                </div>
+
+                {/* Color Option */}
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Color
+                  </label>
+                  <div className="flex gap-4">
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="colorOption"
+                        value="color"
+                        checked={isColor}
+                        onChange={(e) => setIsColor(e.target.value === "color")}
+                        className="w-4 h-4 text-primary border-gray-300 focus:ring-primary"
+                      />
+                      <span className="ml-2 text-sm font-medium text-gray-700">Colored</span>
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="colorOption"
+                        value="bw"
+                        checked={!isColor}
+                        onChange={(e) => setIsColor(e.target.value === "color")}
+                        className="w-4 h-4 text-primary border-gray-300 focus:ring-primary"
+                      />
+                      <span className="ml-2 text-sm font-medium text-gray-700">Black & White</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Orientation */}
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Orientation
+                  </label>
+                  <div className="flex gap-4">
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="orientation"
+                        value="portrait"
+                        checked={orientation === "portrait"}
+                        onChange={(e) => setOrientation(e.target.value)}
+                        className="w-4 h-4 text-primary border-gray-300 focus:ring-primary"
+                      />
+                      <span className="ml-2 text-sm font-medium text-gray-700">Portrait</span>
+                    </label>
+                    <label className="flex items-center">
+                      <input
+                        type="radio"
+                        name="orientation"
+                        value="landscape"
+                        checked={orientation === "landscape"}
+                        onChange={(e) => setOrientation(e.target.value)}
+                        className="w-4 h-4 text-primary border-gray-300 focus:ring-primary"
+                      />
+                      <span className="ml-2 text-sm font-medium text-gray-700">Landscape</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Balance and Smart Price Section */}
+              <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200">
+                <div className="flex justify-between items-center mb-4">
+                  <div className="text-right">
+                    <p className="font-bold text-gray-700 text-xl">
+                      Balance: <span className="text-green-600">{availableCoins}</span> coins
+                    </p>
+                  </div>
+                </div>
+
+                <SmartPriceToggle
+                  paperSize={selectedSize}
+                  isColor={isColor}
+                  copies={copies}
+                  totalPages={totalPages}
+                  setTotalPages={setTotalPages}
+                  isSmartPriceEnabled={isSmartPriceEnabled}
+                  setIsSmartPriceEnabled={setIsSmartPriceEnabled}
+                  calculatedPrice={calculatedPrice}
+                  setCalculatedPrice={setCalculatedPrice}
+                  selectedPageOption={selectedPageOption}
+                  setSelectedPageOption={setSelectedPageOption}
+                  customPageRange={customPageRange}
+                  setCustomPageRange={setCustomPageRange}
+                  filePreviewUrl={filePreviewUrl}
+                />
               </div>
             </div>
           </div>
 
-          {/* Right Side */}
+          {/* Right Side - Document Preview */}
           <div className="w-1/2">
             <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200 h-full">
               <h2 className="text-xl font-bold text-primary mb-4 flex items-center">
@@ -688,7 +856,8 @@ const Usb = () => {
           </div>
         </div>
 
-        <div className="flex justify-center mt-6 mb-4">
+        {/* Print Button */}
+        <div className="flex flex-col items-center mt-6 mb-4">
           <button
             onClick={handlePrint}
             disabled={isLoading || !filePreviewUrl}
@@ -703,7 +872,7 @@ const Usb = () => {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-                Processing...
+                {printStatus || "Processing..."}
               </>
             ) : (
               <>
@@ -712,6 +881,19 @@ const Usb = () => {
               </>
             )}
           </button>
+
+          {/* Progress Bar */}
+          {isLoading && printProgress > 0 && (
+            <div className="w-full max-w-md mt-4">
+              <div className="bg-gray-300 rounded-full h-2.5">
+                <div
+                  className="bg-primary h-2.5 rounded-full transition-all duration-300"
+                  style={{ width: `${printProgress}%` }}
+                ></div>
+              </div>
+              <p className="text-sm text-gray-600 mt-1 text-center">{printStatus}</p>
+            </div>
+          )}
         </div>
       </div>
     </ClientContainer>
