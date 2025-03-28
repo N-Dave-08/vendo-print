@@ -8,6 +8,7 @@ import CustomPage from "../components/common/customized_page";
 import DocumentPreview from "../components/common/document_preview";
 import SmartPriceToggle from "../components/common/smart_price";
 import PrinterList from "../components/usb/printerList";
+import SelectColor from "../components/usb/select_color";
 
 import { realtimeDb, storage } from "../../firebase/firebase_config";
 import { ref as dbRef, push, get, update, set } from "firebase/database";
@@ -68,6 +69,7 @@ const Usb = () => {
   const [externalViewerUrl, setExternalViewerUrl] = useState("");
 
   const [selectedPrinter, setSelectedPrinter] = useState("");
+  const [printerCapabilities, setPrinterCapabilities] = useState(null);
 
   useEffect(() => {
     setShowModal(true);
@@ -707,6 +709,7 @@ const Usb = () => {
                   <PrinterList
                     selectedPrinter={selectedPrinter}
                     setSelectedPrinter={setSelectedPrinter}
+                    onPrinterCapabilities={setPrinterCapabilities}
                   />
                 </div>
 
@@ -746,30 +749,11 @@ const Usb = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Color
                   </label>
-                  <div className="flex gap-4">
-                    <label className="flex items-center">
-                      <input
-                        type="radio"
-                        name="colorOption"
-                        value="color"
-                        checked={isColor}
-                        onChange={(e) => setIsColor(e.target.value === "color")}
-                        className="w-4 h-4 text-primary border-gray-300 focus:ring-primary"
-                      />
-                      <span className="ml-2 text-sm font-medium text-gray-700">Colored</span>
-                    </label>
-                    <label className="flex items-center">
-                      <input
-                        type="radio"
-                        name="colorOption"
-                        value="bw"
-                        checked={!isColor}
-                        onChange={(e) => setIsColor(e.target.value === "color")}
-                        className="w-4 h-4 text-primary border-gray-300 focus:ring-primary"
-                      />
-                      <span className="ml-2 text-sm font-medium text-gray-700">Black & White</span>
-                    </label>
-                  </div>
+                  <SelectColor
+                    isColor={isColor}
+                    setIsColor={setIsColor}
+                    printerCapabilities={printerCapabilities}
+                  />
                 </div>
 
                 {/* Orientation */}

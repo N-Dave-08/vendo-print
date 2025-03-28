@@ -30,12 +30,12 @@ const DocumentPreview = ({ fileUrl, fileName }) => {
         {["pdf", "docx", "xlsx", "pptx", "doc", "xls", "ppt"].includes(
           fileExtension
         ) && (
-          <iframe
-            src={googleDocsViewerUrl}
-            className="w-full h-[80vh]"
-            title="Document Preview"
-          />
-        )}
+            <iframe
+              src={googleDocsViewerUrl}
+              className="w-full h-[80vh]"
+              title="Document Preview"
+            />
+          )}
       </div>
     </div>
   );
