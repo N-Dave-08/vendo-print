@@ -7,6 +7,7 @@ import { ref as dbRef, get, remove, update, set } from "firebase/database";
 import { ref as storageRef, deleteObject } from "firebase/storage";
 import { onValue } from "firebase/database";
 import M_Qrcode from "../components/M_Qrcode";
+import DocumentPreview from "../components/common/document_preview.jsx";
 
 const QRUpload = () => {
   const navigate = useNavigate();
@@ -20,6 +21,9 @@ const QRUpload = () => {
     fileUrl: queryParams.get("url") || "",
     totalPages: parseInt(queryParams.get("pages")) || 1
   });
+
+  // QR Code modal state
+  const [isQrModalOpen, setIsQrModalOpen] = useState(false);
 
   // Print settings
   const [selectedPrinter, setSelectedPrinter] = useState("");
@@ -197,8 +201,54 @@ const QRUpload = () => {
     }
   };
 
+  // Handle opening QR code modal
+  const handleOpenQrModal = () => {
+    setIsQrModalOpen(true);
+  };
+
+  // Handle closing QR code modal
+  const handleCloseQrModal = () => {
+    setIsQrModalOpen(false);
+  };
+
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-100">
+      {/* QR Code Modal */}
+      {isQrModalOpen && (
+        <div
+          className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-60 backdrop-blur-sm z-50 transition-opacity duration-300 ease-in-out"
+          onClick={handleCloseQrModal}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full flex flex-col items-center transform transition-all duration-300 ease-in-out scale-100 opacity-100 animate-fadeIn"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header with gradient background */}
+            <div className="w-full bg-gradient-to-r from-[#31304D] to-[#41405D] rounded-t-2xl p-6">
+              <h2 className="text-2xl font-bold text-white text-center">Scan QR Code</h2>
+              <p className="text-gray-200 text-center text-sm mt-1">Scan with your mobile device to share files</p>
+            </div>
+
+            {/* QR Code Container */}
+            <div className="py-8 px-4 flex flex-col items-center">
+              <div className="bg-white p-4 rounded-xl shadow-md border-2 border-[#31304D] mb-4">
+                <M_Qrcode size={300} />
+              </div>
+              <p className="text-gray-500 text-center text-sm mt-4 px-6">
+                Point your phone's camera at the QR code to open the file upload page
+              </p>
+
+              <div className="mt-6 flex items-center justify-center w-full">
+                <div className="flex items-center gap-2 text-gray-400 text-sm">
+                  <div className="w-2 h-2 rounded-full bg-gray-300"></div>
+                  <span>Click outside to close</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Header with Logo */}
       <div className="bg-white p-4 shadow-md flex items-center">
         <img src={ezlogo} alt="EZ Logo" className="w-16 h-16 mr-4" />
@@ -234,7 +284,7 @@ const QRUpload = () => {
                 </div>
                 <div className="flex justify-center">
                   <div className="w-56 h-56 flex items-center justify-center">
-                    <M_Qrcode />
+                    <M_Qrcode onClick={handleOpenQrModal} />
                   </div>
                 </div>
               </div>
@@ -255,7 +305,7 @@ const QRUpload = () => {
           {/* Right Side - Uploaded Files and Print (2/3 width) */}
           <div className="flex flex-col h-full md:col-span-2">
             {/* Uploaded Files Section */}
-            <div className="bg-white rounded-lg shadow-sm p-6 mb-6 flex-grow">
+            <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
               <h2 className="text-xl font-bold text-[#31304D] mb-4 flex justify-between items-center">
                 <span>Uploaded files</span>
                 <span className="text-sm font-normal text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
@@ -263,7 +313,7 @@ const QRUpload = () => {
                 </span>
               </h2>
 
-              <div className="min-h-[400px]">
+              <div className="min-h-[250px]">
                 {uploadedFiles.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full py-12">
                     <div className="bg-gray-100 p-4 rounded-full mb-3">
@@ -352,6 +402,82 @@ const QRUpload = () => {
               </div>
             </div>
 
+            {/* Document Preview Section - Enhanced version with better error handling */}
+            <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+              <h2 className="text-xl font-bold text-[#31304D] mb-4 flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Document Preview
+              </h2>
+
+              <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-50 min-h-[400px]">
+                {selectedFile.fileName ? (
+                  <div className="relative w-full h-full">
+                    <ErrorBoundary fallback={
+                      <div className="w-full h-full flex flex-col items-center justify-center p-8">
+                        <div className="bg-red-100 p-4 rounded-lg mb-4">
+                          <svg className="w-12 h-12 text-red-500 mx-auto mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                          </svg>
+                          <p className="text-red-700 text-center">An error occurred while loading the preview</p>
+                        </div>
+                        <p className="text-gray-600 text-center">
+                          The preview could not be loaded, but you can still print the document.
+                          Try refreshing the page if the problem persists.
+                        </p>
+                      </div>
+                    }>
+                      <DocumentPreview
+                        fileUrl={selectedFile.fileUrl}
+                        fileName={selectedFile.fileName}
+                      />
+                    </ErrorBoundary>
+
+                    {/* File Info Panel - Always show this when a file is selected regardless of preview status */}
+                    <div className="absolute bottom-0 left-0 right-0 bg-white bg-opacity-95 border-t border-gray-200 p-4">
+                      <div className="flex items-center">
+                        {selectedFile.fileName.toLowerCase().endsWith('.pdf') ? (
+                          <div className="w-10 h-10 bg-red-500 flex-shrink-0 rounded-md flex items-center justify-center mr-3">
+                            <span className="text-white font-bold">PDF</span>
+                          </div>
+                        ) : selectedFile.fileName.toLowerCase().endsWith('.pptx') ? (
+                          <div className="w-10 h-10 bg-orange-500 flex-shrink-0 rounded-md flex items-center justify-center mr-3">
+                            <span className="text-white font-bold">PPT</span>
+                          </div>
+                        ) : (
+                          <div className="w-10 h-10 bg-blue-600 flex-shrink-0 rounded-md flex items-center justify-center mr-3">
+                            <span className="text-white font-bold">DOC</span>
+                          </div>
+                        )}
+                        <div className="flex-1">
+                          <h3 className="font-medium text-gray-800 truncate">{selectedFile.fileName}</h3>
+                          <p className="text-sm text-gray-500">
+                            {selectedFile.totalPages} {selectedFile.totalPages === 1 ? 'page' : 'pages'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-2 text-sm text-gray-500">
+                        <p className="italic">Some document types may not preview correctly due to browser restrictions, but they will print properly.</p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center p-8">
+                    <div className="bg-gray-100 p-6 rounded-full mb-4">
+                      <svg className="w-16 h-16 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                      </svg>
+                    </div>
+                    <h3 className="text-lg font-medium text-gray-700 mb-2">No document selected</h3>
+                    <p className="text-gray-500 text-center max-w-md">
+                      Select a file from the list above to preview its contents before printing
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Print Options and Button */}
             <div className="bg-white rounded-lg shadow-sm p-6">
               <div className="flex flex-wrap justify-between items-center mb-4">
@@ -414,5 +540,44 @@ const QRUpload = () => {
     </div>
   );
 };
+
+// Add this at the end of the file before the export statement:
+// CSS for animation
+const styleSheet = document.createElement("style");
+styleSheet.type = "text/css";
+styleSheet.innerText = `
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out forwards;
+}
+`;
+document.head.appendChild(styleSheet);
+
+// Add this ErrorBoundary class at the end of the file, before export default
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("Preview error caught by ErrorBoundary:", error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+
+    return this.props.children;
+  }
+}
 
 export default QRUpload;

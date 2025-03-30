@@ -1,176 +1,123 @@
 import React, { useState, useEffect } from "react";
 import { Loader } from "lucide-react";
-import { getStorage, ref, getBlob } from "firebase/storage";
-import { storage } from "../../../firebase/firebase_config";
 import mammoth from "mammoth";
+import axios from "axios";
 
-const DocumentPreview = ({ fileUrl, fileName, fileToUpload }) => {
-  const [viewerError, setViewerError] = useState(false);
+// Determine the API base URL dynamically
+const API_BASE_URL = process.env.NODE_ENV === 'production'
+  ? window.location.origin // Use same origin in production
+  : 'http://localhost:5000'; // Use localhost in development
+
+const DocumentPreview = ({ fileUrl, fileName }) => {
   const [loading, setLoading] = useState(true);
-  const [blobUrl, setBlobUrl] = useState(null);
   const [docxHtml, setDocxHtml] = useState(null);
+  const [previewError, setPreviewError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [retryCount, setRetryCount] = useState(0);
+
   const fileExtension = fileName ? fileName.split('.').pop().toLowerCase() : '';
+  const isDocx = ['doc', 'docx'].includes(fileExtension);
 
   useEffect(() => {
-    setViewerError(false);
+    let isMounted = true;
+    let source = axios.CancelToken.source();
+
     setLoading(true);
     setDocxHtml(null);
+    setPreviewError(false);
+    setErrorMessage("");
 
-    // Handle local DOCX files with mammoth preview
-    const handleDocxPreview = async (file) => {
-      try {
-        if (!['doc', 'docx'].includes(fileExtension)) {
-          return false;
-        }
-
-        console.log("Trying to render DOCX preview");
-        const arrayBuffer = await file.arrayBuffer();
-        const result = await mammoth.convertToHtml({ arrayBuffer });
-        setDocxHtml(result.value);
-        setLoading(false);
-        return true;
-      } catch (error) {
-        console.error("Failed to process DOCX file:", error);
-        return false;
-      }
-    };
-
-    // If we have a local file (fileToUpload), use it directly first
-    if (fileToUpload) {
-      try {
-        console.log("Using local file directly:", fileToUpload.name);
-
-        // If it's a DOCX file, try to render it using mammoth.js
-        if (['doc', 'docx'].includes(fileExtension)) {
-          handleDocxPreview(fileToUpload);
-          return;
-        }
-
-        // For other file types, create an object URL
-        const url = URL.createObjectURL(fileToUpload);
-        setBlobUrl(url);
-        setLoading(false);
+    const fetchAndPreviewDocx = async () => {
+      if (!fileUrl || !isDocx) {
+        if (isMounted) setLoading(false);
         return;
-      } catch (error) {
-        console.error("Error creating URL from local file:", error);
-        // Continue to Firebase approach if this fails
       }
-    }
 
-    if (!fileUrl) {
-      setLoading(false);
-      return;
-    }
-
-    // Function to create a blob URL from a file using Firebase Storage SDK
-    const fetchDocumentFromFirebase = async () => {
       try {
-        console.log("Attempting to fetch from Firebase:", fileUrl);
+        console.log(`Fetching DOCX file via proxy (attempt ${retryCount + 1}):`, fileUrl);
 
-        // Extract storage path from the Firebase URL
-        // Convert URL like "https://firebasestorage.googleapis.com/v0/b/ezprint-4258e.firebasestorage.a.701_test-printer.docx"
-        // to a storage path like "uploads/test-printer.docx"
-        let storagePath;
+        // Use our backend proxy endpoint
+        const proxyUrl = `${API_BASE_URL}/api/document-proxy?url=${encodeURIComponent(fileUrl)}&fileName=${encodeURIComponent(fileName)}`;
 
-        if (fileUrl.includes('firebasestorage.googleapis.com')) {
-          // This is a Firebase Storage URL, extract the file path
-          const pathMatch = fileUrl.match(/\/([^/?]+)(?:\?.*)?$/);
-          if (pathMatch) {
-            const filename = pathMatch[1];
-            storagePath = `uploads/${decodeURIComponent(filename.split('_').pop())}`;
-          } else {
-            throw new Error("Invalid Firebase Storage URL format");
+        // Fetch the file as an arraybuffer
+        const response = await axios.get(proxyUrl, {
+          responseType: 'arraybuffer',
+          timeout: 15000, // 15 second timeout for slow connections
+          cancelToken: source.token,
+          // Simplified headers to avoid CORS issues
+          headers: {
+            'Cache-Control': 'no-cache'
           }
-        } else {
-          // This could be a direct path or another URL format
-          storagePath = fileUrl;
-        }
+        });
 
-        console.log("Fetching from storage path:", storagePath);
+        if (!isMounted) return;
 
-        // Use Firebase Storage SDK to get the blob
-        const storageRef = ref(storage, storagePath);
-        const blob = await getBlob(storageRef);
+        // Convert DOCX to HTML using mammoth
+        try {
+          const result = await mammoth.convertToHtml({ arrayBuffer: response.data });
+          if (!isMounted) return;
 
-        // If it's a DOCX file, try to render it
-        if (['doc', 'docx'].includes(fileExtension)) {
-          const arrayBuffer = await blob.arrayBuffer();
-          try {
-            const result = await mammoth.convertToHtml({ arrayBuffer });
-            setDocxHtml(result.value);
-            setLoading(false);
-            return;
-          } catch (docxError) {
-            console.error("Failed to process DOCX from Firebase:", docxError);
-            // Fall back to normal handling
+          setDocxHtml(result.value);
+          setLoading(false);
+        } catch (mammothError) {
+          console.error("Error converting DOCX to HTML:", mammothError);
+          if (!isMounted) return;
+
+          // If this is the first attempt, try one more time
+          if (retryCount < 1) {
+            setRetryCount(prev => prev + 1);
+            return; // Let the effect run again with increased retry count
           }
-        }
 
-        // Create object URL from blob for other files
-        const url = URL.createObjectURL(blob);
-        setBlobUrl(url);
-        setLoading(false);
-      } catch (error) {
-        console.error("Error loading document from Firebase:", error);
-
-        // If we have a direct URL, try using that as a fallback
-        if (fileUrl) {
-          try {
-            console.log("Attempting direct fetch of URL:", fileUrl);
-            // Try a direct fetch as last resort
-            const response = await fetch(fileUrl, {
-              mode: 'cors',
-              headers: {
-                'Access-Control-Allow-Origin': '*'
-              }
-            });
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-            const blob = await response.blob();
-
-            // If it's a DOCX file, try to render it
-            if (['doc', 'docx'].includes(fileExtension)) {
-              try {
-                const arrayBuffer = await blob.arrayBuffer();
-                const result = await mammoth.convertToHtml({ arrayBuffer });
-                setDocxHtml(result.value);
-                setLoading(false);
-                return;
-              } catch (docxError) {
-                console.error("Failed to process fetched DOCX:", docxError);
-                // Fall back to normal handling
-              }
-            }
-
-            const url = URL.createObjectURL(blob);
-            setBlobUrl(url);
-            setLoading(false);
-            return;
-          } catch (fetchError) {
-            console.error("Error with direct fetch:", fetchError);
-            setViewerError(true);
-            setLoading(false);
-          }
-        } else {
-          setViewerError(true);
+          setPreviewError(true);
+          setErrorMessage("Could not convert the document to HTML for preview.");
           setLoading(false);
         }
+      } catch (fetchError) {
+        console.error("Error fetching DOCX file:", fetchError);
+        if (!isMounted) return;
+
+        // If this is the first attempt, try one more time
+        if (retryCount < 1) {
+          setRetryCount(prev => prev + 1);
+          return; // Let the effect run again with increased retry count
+        }
+
+        setPreviewError(true);
+
+        // More specific error messages based on the error type
+        if (fetchError.message && fetchError.message.includes('Network Error')) {
+          setErrorMessage("Network error. The server may be unavailable or CORS is blocking access.");
+        } else if (fetchError.response?.status === 404) {
+          setErrorMessage("Document not found. It may have been deleted or moved.");
+        } else {
+          setErrorMessage("Could not load the document. Please check your connection.");
+        }
+
+        setLoading(false);
       }
     };
 
-    fetchDocumentFromFirebase();
+    // For DOCX files, try to use mammoth
+    if (isDocx) {
+      fetchAndPreviewDocx();
+    } else {
+      // For non-DOCX files, just show file info after a short delay
+      const timer = setTimeout(() => {
+        if (isMounted) setLoading(false);
+      }, 800);
+      return () => clearTimeout(timer);
+    }
 
-    // Cleanup function to revoke blob URL when component unmounts
     return () => {
-      if (blobUrl) {
-        URL.revokeObjectURL(blobUrl);
-      }
+      isMounted = false;
+      source.cancel('Component unmounted');
     };
-  }, [fileUrl, fileToUpload, fileExtension]);
+  }, [fileUrl, fileName, isDocx, retryCount]);
 
-  if (!fileUrl && !fileToUpload) {
+  if (!fileName) {
     return (
-      <div className="w-full h-64 flex items-center justify-center text-gray-500">
+      <div className="w-full h-full flex items-center justify-center text-gray-500">
         <p>No file selected</p>
       </div>
     );
@@ -178,138 +125,134 @@ const DocumentPreview = ({ fileUrl, fileName, fileToUpload }) => {
 
   if (loading) {
     return (
-      <div className="w-full h-64 flex flex-col items-center justify-center">
-        <Loader className="w-10 h-10 text-primary animate-spin mb-2" />
-        <p className="text-gray-600">Loading preview...</p>
+      <div className="w-full h-full flex flex-col items-center justify-center p-8">
+        <Loader className="w-12 h-12 text-primary animate-spin mb-4" />
+        <p className="text-gray-600">
+          {isDocx ? "Preparing document preview..." : "Loading document information..."}
+        </p>
       </div>
     );
   }
 
-  const renderPreview = () => {
-    // For DOCX files with HTML content
-    if ((['doc', 'docx'].includes(fileExtension)) && docxHtml) {
-      return (
-        <div className="w-full h-full overflow-auto bg-white p-4">
-          <div
-            dangerouslySetInnerHTML={{ __html: docxHtml }}
-            className="docx-preview"
-          />
-        </div>
-      );
-    }
-
-    // For PDF files
-    if (fileExtension === 'pdf' && blobUrl) {
-      return (
-        <iframe
-          src={`${blobUrl}#toolbar=0&navpanes=0`}
-          className="w-full h-full border-none"
-          title="PDF Preview"
-        />
-      );
-    }
-
-    // For image files
-    if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(fileExtension) && blobUrl) {
-      return (
-        <div className="w-full h-full flex items-center justify-center bg-gray-100">
-          <img
-            src={blobUrl}
-            alt={fileName}
-            className="max-w-full max-h-full object-contain"
-          />
-        </div>
-      );
-    }
-
-    // For Word files and other document types where we couldn't render a preview
-    if (['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt'].includes(fileExtension)) {
-      let iconColor = 'text-blue-500';
-      let iconLetter = 'W';
-
-      if (['ppt', 'pptx'].includes(fileExtension)) {
-        iconColor = 'text-orange-500';
-        iconLetter = 'P';
-      } else if (['xls', 'xlsx'].includes(fileExtension)) {
-        iconColor = 'text-green-500';
-        iconLetter = 'X';
-      } else if (fileExtension === 'txt') {
-        iconColor = 'text-gray-500';
-        iconLetter = 'T';
-      }
-
-      return (
-        <div className="w-full h-full flex flex-col items-center justify-center bg-gray-50">
-          <div className={`w-20 h-24 relative mb-4`}>
-            <div className="absolute inset-0 bg-white border border-gray-200 rounded-sm shadow"></div>
-            <div className={`absolute left-0 top-0 w-12 h-12 bg-blue-600 flex items-center justify-center`}>
-              <span className="text-white font-bold text-2xl">{iconLetter}</span>
+  // If we have successfully converted DOCX to HTML, show it
+  if (isDocx && docxHtml && !previewError) {
+    return (
+      <div className="w-full h-full flex flex-col">
+        <div className="w-full bg-gray-100 p-2 border-b border-gray-200">
+          <div className="flex items-center">
+            <div className="w-8 h-8 bg-blue-600 flex-shrink-0 rounded-md flex items-center justify-center mr-2">
+              <span className="text-white font-bold text-sm">W</span>
             </div>
-            <div className="absolute right-4 bottom-3 flex flex-col items-start space-y-1">
-              <div className={`w-10 h-0.5 ${iconColor}`}></div>
-              <div className={`w-10 h-0.5 ${iconColor}`}></div>
-              <div className={`w-10 h-0.5 ${iconColor}`}></div>
+            <div className="flex-1">
+              <h3 className="font-medium text-gray-800 truncate text-sm">{fileName}</h3>
             </div>
           </div>
-          <p className="font-medium text-gray-800">{fileName}</p>
-          <p className="text-sm text-gray-500 mt-1">Preview not available for this file type</p>
-          <a
-            href={blobUrl}
-            download={fileName}
-            className="mt-4 px-4 py-2 bg-primary text-white rounded-md hover:bg-primary-dark"
-            onClick={(e) => e.stopPropagation()}
-          >
-            Download to View
-          </a>
         </div>
-      );
-    }
-
-    // Fallback for other file types
-    return (
-      <div className="w-full h-full flex flex-col items-center justify-center">
-        <div className="mb-4">
-          <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-            <line x1="16" y1="13" x2="8" y2="13"></line>
-            <line x1="16" y1="17" x2="8" y2="17"></line>
-            <polyline points="10 9 9 9 8 9"></polyline>
-          </svg>
+        <div className="flex-1 overflow-auto p-5 bg-white">
+          <div
+            className="docx-preview prose max-w-none"
+            dangerouslySetInnerHTML={{ __html: docxHtml }}
+          />
         </div>
-        <h3 className="text-lg font-semibold">{fileName}</h3>
-        <p className="text-gray-600 mt-2">Preview not available for this file type</p>
-        <a
-          href={blobUrl}
-          download={fileName}
-          className="mt-4 px-4 py-2 bg-primary text-white rounded-md hover:bg-primary-dark"
-          onClick={(e) => e.stopPropagation()}
-        >
-          Download
-        </a>
+        <div className="bg-gray-50 p-2 border-t border-gray-200 text-xs text-gray-500 text-center">
+          Preview powered by mammoth.js | Some formatting may differ from the original document
+        </div>
       </div>
     );
-  };
+  }
 
-  if (viewerError) {
-    return (
-      <div className="w-full h-full flex flex-col items-center justify-center">
-        <div className="mb-4 text-red-500">
-          <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="12" y1="8" x2="12" y2="12"></line>
-            <line x1="12" y1="16" x2="12.01" y2="16"></line>
-          </svg>
-        </div>
-        <h3 className="text-lg font-semibold">Preview Unavailable</h3>
-        <p className="text-gray-600 mt-2">Could not load the document preview due to CORS restrictions. You can still print this document using the Print button.</p>
-      </div>
-    );
+  // Determine file type icon and colors for non-DOCX or error cases
+  let iconColor = 'text-blue-500';
+  let iconLetter = 'W';
+  let iconBg = 'bg-blue-600';
+  let fileTypeName = 'Document';
+
+  if (fileExtension === 'pdf') {
+    iconColor = 'text-red-300';
+    iconLetter = 'P';
+    iconBg = 'bg-red-500';
+    fileTypeName = 'PDF Document';
+  } else if (['ppt', 'pptx'].includes(fileExtension)) {
+    iconColor = 'text-orange-300';
+    iconLetter = 'P';
+    iconBg = 'bg-orange-500';
+    fileTypeName = 'PowerPoint Presentation';
+  } else if (['xls', 'xlsx'].includes(fileExtension)) {
+    iconColor = 'text-green-300';
+    iconLetter = 'X';
+    iconBg = 'bg-green-500';
+    fileTypeName = 'Excel Spreadsheet';
+  } else if (['doc', 'docx'].includes(fileExtension)) {
+    iconColor = 'text-blue-300';
+    iconLetter = 'W';
+    iconBg = 'bg-blue-600';
+    fileTypeName = 'Word Document';
+  } else if (['jpg', 'jpeg', 'png', 'gif'].includes(fileExtension)) {
+    iconColor = 'text-purple-300';
+    iconLetter = 'I';
+    iconBg = 'bg-purple-600';
+    fileTypeName = 'Image';
+  } else if (fileExtension === 'txt') {
+    iconColor = 'text-gray-300';
+    iconLetter = 'T';
+    iconBg = 'bg-gray-500';
+    fileTypeName = 'Text File';
   }
 
   return (
-    <div className="w-full h-96 relative overflow-hidden rounded-md border border-gray-200">
-      {renderPreview()}
+    <div className="w-full h-full flex flex-col items-center justify-center bg-gray-50 p-8">
+      <div className="w-24 h-32 relative mb-6">
+        <div className="absolute inset-0 bg-white border border-gray-200 rounded-md shadow-md"></div>
+        <div className={`absolute left-0 top-0 w-16 h-16 ${iconBg} flex items-center justify-center`}>
+          <span className="text-white font-bold text-4xl">{iconLetter}</span>
+        </div>
+        {fileExtension === 'pdf' && (
+          <div className="absolute right-0 top-5 w-10 h-10">
+            <svg viewBox="0 0 24 24" className="w-full h-full text-red-300" fill="currentColor">
+              <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z" />
+            </svg>
+          </div>
+        )}
+        {['doc', 'docx', 'txt'].includes(fileExtension) && (
+          <div className="absolute right-4 bottom-6 flex flex-col items-start space-y-1">
+            <div className={`w-12 h-1 ${iconColor}`}></div>
+            <div className={`w-12 h-1 ${iconColor}`}></div>
+            <div className={`w-12 h-1 ${iconColor}`}></div>
+          </div>
+        )}
+        {['ppt', 'pptx'].includes(fileExtension) && (
+          <div className="absolute right-0 top-5 w-10 h-10">
+            <svg viewBox="0 0 24 24" className="w-full h-full text-orange-300" fill="currentColor">
+              <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z" />
+            </svg>
+          </div>
+        )}
+      </div>
+
+      <h3 className="text-2xl font-semibold text-gray-800 mb-2 text-center">{fileName}</h3>
+      <p className="text-gray-500 mb-4">{fileTypeName}</p>
+
+      <div className="max-w-md text-center bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
+        {isDocx && previewError ? (
+          <>
+            <p className="text-red-600 font-medium">
+              {errorMessage || "Could not preview this document"}
+            </p>
+            <p className="text-gray-600 mt-2">
+              Your document will still print correctly when you use the Print button below.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="text-gray-600">
+              Document previews are currently unavailable due to browser security restrictions.
+            </p>
+            <p className="text-gray-600 mt-2">
+              Your document will print correctly when you use the Print button below.
+            </p>
+          </>
+        )}
+      </div>
     </div>
   );
 };

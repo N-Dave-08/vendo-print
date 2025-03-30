@@ -15,6 +15,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
 import multer from 'multer';
+import axios from 'axios';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -196,6 +197,152 @@ BackendRoutes.post('/xerox/print', async (req, res) => {
       message: error.message
     });
   }
+});
+
+// Document proxy endpoint to solve CORS issues
+BackendRoutes.get('/document-proxy', async (req, res) => {
+  const { url, fileName } = req.query;
+
+  if (!url) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'URL parameter is required'
+    });
+  }
+
+  try {
+    console.log(`📄 Proxying request for file: ${fileName || 'unknown'}`);
+    console.log(`🔗 Source URL: ${url}`);
+
+    // Function to attempt fetch with retry logic
+    const fetchWithRetry = async (retriesLeft = 2, delay = 1000) => {
+      try {
+        const response = await axios({
+          method: 'GET',
+          url: url,
+          responseType: 'arraybuffer',
+          timeout: 10000, // 10 second timeout
+          maxContentLength: 20 * 1024 * 1024, // 20MB max file size
+          headers: {
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          }
+        });
+
+        console.log(`✅ Successfully proxied file: ${fileName || 'unknown'} (${response.data.byteLength} bytes)`);
+        return response;
+      } catch (error) {
+        console.error(`❌ Fetch attempt failed:`, error.message);
+
+        if (retriesLeft <= 0) {
+          throw error;
+        }
+
+        console.log(`⏱️ Retrying in ${delay}ms... (${retriesLeft} attempts left)`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return fetchWithRetry(retriesLeft - 1, delay * 1.5);
+      }
+    };
+
+    // Fetch the file with retry logic
+    const response = await fetchWithRetry();
+
+    // Set appropriate content type based on file extension
+    const fileExtension = fileName ? fileName.split('.').pop().toLowerCase() : '';
+    let contentType = 'application/octet-stream'; // Default content type
+
+    switch (fileExtension) {
+      case 'pdf':
+        contentType = 'application/pdf';
+        break;
+      case 'doc':
+      case 'docx':
+        contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        break;
+      case 'jpg':
+      case 'jpeg':
+        contentType = 'image/jpeg';
+        break;
+      case 'png':
+        contentType = 'image/png';
+        break;
+      case 'gif':
+        contentType = 'image/gif';
+        break;
+      case 'txt':
+        contentType = 'text/plain';
+        break;
+    }
+
+    // Set response headers - with explicit CORS headers to ensure no issues
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${fileName || 'document'}"`);
+    res.setHeader('Access-Control-Allow-Origin', '*'); // More permissive for direct access
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Content-Length, X-Requested-With, Cache-Control, Pragma, Expires');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    // Send the file data
+    return res.send(response.data);
+  } catch (error) {
+    console.error('❌ Error proxying document:', error.message);
+
+    // Determine appropriate status code and message based on error
+    let statusCode = 500;
+    let errorMessage = 'Failed to fetch document from source';
+
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      statusCode = error.response.status;
+
+      if (statusCode === 404) {
+        errorMessage = 'Document not found. It may have been deleted or moved.';
+      } else if (statusCode === 403) {
+        errorMessage = 'Access to this document is forbidden. You may not have permission to view it.';
+      } else if (statusCode >= 500) {
+        errorMessage = 'The source server encountered an error. Please try again later.';
+      }
+    } else if (error.request) {
+      // The request was made but no response was received
+      statusCode = 503;
+      errorMessage = 'Unable to reach the document source. It may be temporarily unavailable.';
+    }
+
+    // Set CORS headers even for error responses
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Content-Length, X-Requested-With, Cache-Control, Pragma, Expires');
+
+    return res.status(statusCode).json({
+      status: 'error',
+      message: errorMessage,
+      details: error.message
+    });
+  }
+});
+
+// Add a specific OPTIONS handler for the document-proxy endpoint to handle preflight requests
+BackendRoutes.options('/document-proxy', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Content-Length, X-Requested-With, Cache-Control, Pragma, Expires');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
+  res.status(204).end();
+});
+
+// Add a health check endpoint for diagnostics
+BackendRoutes.get('/health', (req, res) => {
+  return res.json({
+    status: 'success',
+    message: 'Server is healthy',
+    timestamp: new Date().toISOString(),
+    env: process.env.NODE_ENV || 'development',
+    memory: process.memoryUsage(),
+    uptime: process.uptime()
+  });
 });
 
 export default BackendRoutes;
