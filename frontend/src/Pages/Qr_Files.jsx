@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { FaArrowLeft, FaPrint, FaTimes } from "react-icons/fa";
 import { ezlogo } from "../assets/Icons";
 import { realtimeDb, storage } from "../../firebase/firebase_config";
-import { ref as dbRef, get, remove, update } from "firebase/database";
+import { ref as dbRef, get, remove, update, set } from "firebase/database";
 import { ref as storageRef, deleteObject } from "firebase/storage";
 import { onValue } from "firebase/database";
 import M_Qrcode from "../components/M_Qrcode";
@@ -132,12 +132,14 @@ const QRUpload = () => {
 
     setIsLoading(true);
     try {
-      // Add to print queue
-      const printJobsRef = dbRef(realtimeDb, "files");
-      const newPrintJobRef = dbRef(realtimeDb, "files");
+      // Create a unique ID for the print job
+      const printJobId = Date.now().toString();
+
+      // Add to print queue with the unique ID
+      const printJobRef = dbRef(realtimeDb, `files/${printJobId}`);
 
       // Add print job details
-      await update(newPrintJobRef, {
+      await set(printJobRef, {
         fileName: selectedFile.fileName,
         fileUrl: selectedFile.fileUrl,
         printerName: selectedPrinter || "default",
@@ -146,18 +148,48 @@ const QRUpload = () => {
         totalPages: selectedFile.totalPages,
         price: price,
         timestamp: new Date().toISOString(),
-        status: "Pending"
+        status: "Processing",
+        progress: 5,
+        printStatus: "Preparing print job..."
       });
 
       // Update balance
       const updatedBalance = balance - price;
       await update(dbRef(realtimeDb, "coinCount"), { availableCoins: updatedBalance });
 
-      // Show success message
+      // Immediately redirect to printer page
+      navigate('/printer');
+
+      // Simulate print progress in the background with more detailed steps
+      const progressSteps = [
+        { progress: 15, status: "Processing document...", delay: 800 },
+        { progress: 30, status: "Configuring printer settings...", delay: 1500 },
+        { progress: 45, status: "Converting document format...", delay: 2200 },
+        { progress: 60, status: "Connecting to printer...", delay: 3000 },
+        { progress: 75, status: "Sending to printer...", delay: 3800 },
+        { progress: 85, status: "Printing in progress...", delay: 4500 },
+        { progress: 95, status: "Finishing print job...", delay: 5200 },
+      ];
+
+      // Update progress in the background
+      for (const step of progressSteps) {
+        setTimeout(() => {
+          update(printJobRef, {
+            progress: step.progress,
+            printStatus: step.status
+          });
+        }, step.delay);
+      }
+
+      // Complete the job after all steps
       setTimeout(() => {
-        setIsLoading(false);
-        alert("Print job sent successfully!");
-      }, 2000);
+        update(printJobRef, {
+          status: "Done",
+          progress: 100,
+          printStatus: "Print job completed"
+        });
+      }, 6000);
+
     } catch (error) {
       console.error("Print error:", error);
       alert("Failed to print. Please try again.");

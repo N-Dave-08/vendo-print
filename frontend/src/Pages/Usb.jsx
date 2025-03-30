@@ -321,25 +321,16 @@ const Usb = () => {
     }
 
     try {
-      // Get the selected pages based on page options
-      setPrintStatus("Processing document...");
-      setPrintProgress(20);
-
-      const pagesToPrint = getPageIndicesToPrint({
-        totalPages,
-        selectedPageOption,
-        customPageRange,
-      });
-
       // Get file extension
       const fileName = fileToUpload.name;
       const fileExtension = fileName.split('.').pop().toLowerCase();
 
-      setPrintStatus("Preparing printer settings...");
-      setPrintProgress(30);
+      // Create a unique ID for the print job
+      const printJobId = Date.now().toString();
 
-      // Create the print job object with all settings
-      const printJob = {
+      // Record the print job in Firebase first
+      const printJobsRef = dbRef(realtimeDb, `files/${printJobId}`);
+      await set(printJobsRef, {
         fileName: fileName,
         fileUrl: filePreviewUrl,
         printerName: selectedPrinter,
@@ -351,154 +342,93 @@ const Usb = () => {
         customPageRange,
         totalPages,
         price: calculatedPrice,
-        // Add additional properties that might help with debugging
+        progress: 5, // Start with 5% right away
+        printStatus: "Preparing print job...",
+        status: "Processing",
         fileType: fileExtension,
         timestamp: new Date().toISOString()
-      };
-
-      // Add special handling for specific file types
-      if (['doc', 'docx'].includes(fileExtension)) {
-        // For Word documents, inform the user about enhanced printing
-        setPrintStatus("Using enhanced Word document printing...");
-        console.log("📄 Using enhanced Word document printing capabilities");
-      } else if (fileExtension === 'pdf') {
-        // For PDFs, apply specific settings
-        setPrintStatus("Configuring PDF settings...");
-        console.log("📑 Applying PDF-specific print settings");
-      }
-
-      console.log('🖨️ Print request initiated with data:', {
-        fileName: fileToUpload.name,
-        printerName: selectedPrinter,
-        copies,
-        selectedSize,
-        isColor,
-        orientation,
-        selectedPageOption,
-        totalPages,
-        price: calculatedPrice,
-        fileType: fileExtension
       });
 
-      console.log('🔗 File URL:', filePreviewUrl);
-
-      const apiUrl = 'http://localhost:5000/api/print';
-      console.log(`📡 Sending POST request to: ${apiUrl}`);
-      console.log('📦 Request body:', JSON.stringify(printJob, null, 2));
-
-      setPrintStatus("Sending to printer...");
-      setPrintProgress(50);
-
-      // Send print job to backend with retry mechanism
-      let response;
-      let retryCount = 0;
-      const maxRetries = 2;
-
-      while (retryCount <= maxRetries) {
-        try {
-          response = await fetch(apiUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(printJob)
-          });
-
-          if (response.ok) break;
-
-          // If we're here, the response wasn't ok
-          retryCount++;
-          setPrintStatus(`Retry attempt ${retryCount}...`);
-          console.log(`Retry attempt ${retryCount} of ${maxRetries}`);
-
-          if (retryCount <= maxRetries) {
-            // Wait before retrying (exponential backoff)
-            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, retryCount)));
-          }
-        } catch (fetchError) {
-          console.error("Fetch error:", fetchError);
-          retryCount++;
-          setPrintStatus(`Connection error, retrying...`);
-
-          if (retryCount <= maxRetries) {
-            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, retryCount)));
-          } else {
-            throw fetchError;
-          }
-        }
-      }
-
-      if (!response || !response.ok) {
-        throw new Error(`Print failed after ${retryCount} retries. Server returned ${response?.status || 'unknown'}`);
-      }
-
-      console.log(`🔄 Response status: ${response.status} ${response.statusText}`);
-      setPrintProgress(70);
-      setPrintStatus("Processing print job...");
-
-      const responseData = await response.json().catch(e => null);
-      console.log('📥 Response data:', responseData);
-
-      // Special handling for Word documents
-      if (['doc', 'docx'].includes(fileExtension)) {
-        console.log('Word document detected, checking print result...');
-        setPrintStatus("Verifying Word document print job...");
-
-        if (responseData?.details?.results) {
-          const results = responseData.details.results;
-          console.log('Print results:', results);
-
-          // Check if any of the print methods succeeded
-          const anySuccess = results.some(r =>
-            r.result &&
-            (r.result.includes('success') ||
-              r.result.includes('sent to printer') ||
-              r.result.includes('Print command sent'))
-          );
-
-          if (!anySuccess && responseData.success) {
-            console.warn('Server reported success but no successful print results found');
-            setPrintStatus("Print job sent but verification uncertain");
-          } else if (anySuccess) {
-            setPrintStatus("Print job verified successfully!");
-          }
-        }
-      }
-
-      setPrintProgress(80);
-      setPrintStatus("Recording transaction...");
-
-      // Record the print job in Firebase
-      console.log('📝 Recording print job in Firebase...');
-      await recordPrintJob();
-
-      // Update coins after successful print
+      // Update coins immediately
       const updatedCoins = availableCoins - calculatedPrice;
-      console.log(`💰 Updating coins from ${availableCoins} to ${updatedCoins}`);
       await update(dbRef(realtimeDb, "coinCount"), {
         availableCoins: updatedCoins
       });
       setAvailableCoins(updatedCoins);
 
-      setPrintProgress(100);
-      setPrintStatus("Print job completed successfully!");
+      // Immediately redirect to printer page
+      navigate('/printer');
 
-      // Show success message
-      alert("Print job submitted successfully!");
+      // Progress simulation steps for background updates
+      const progressSteps = [
+        { progress: 15, status: "Processing document...", delay: 800 },
+        { progress: 30, status: "Configuring printer settings...", delay: 1500 },
+        { progress: 45, status: "Converting document format...", delay: 2200 },
+        { progress: 60, status: "Connecting to printer...", delay: 3000 },
+        { progress: 75, status: "Sending to printer...", delay: 3800 },
+        { progress: 85, status: "Printing in progress...", delay: 4500 },
+        { progress: 95, status: "Finishing print job...", delay: 5200 },
+      ];
 
-      // Reset form
-      setTimeout(() => {
-        setFileToUpload(null);
-        setFilePreviewUrl("");
-        setIsLoading(false);
-        setPrintStatus("");
-        setPrintProgress(0);
-      }, 2000); // Give user time to see the success status
+      // Start updating progress in the background
+      for (const step of progressSteps) {
+        setTimeout(() => {
+          update(printJobsRef, {
+            progress: step.progress,
+            printStatus: step.status
+          });
+        }, step.delay);
+      }
+
+      // Continue with API call in the background
+      const printJob = {
+        jobId: printJobId,
+        fileName: fileName,
+        fileUrl: filePreviewUrl,
+        printerName: selectedPrinter,
+        copies: copies,
+        selectedSize,
+        isColor,
+        orientation,
+        selectedPageOption,
+        customPageRange,
+        totalPages
+      };
+
+      // Make API call in the background
+      fetch('http://localhost:5000/api/print', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(printJob)
+      })
+        .then(response => {
+          if (!response.ok) {
+            throw new Error(`Print failed. Server returned ${response.status}`);
+          }
+          return response.json();
+        })
+        .then(data => {
+          // Update the print job with success status
+          update(printJobsRef, {
+            progress: 100,
+            printStatus: "Print job completed",
+            status: "Done"
+          });
+        })
+        .catch(error => {
+          console.error("Error in background print job:", error);
+          // Update the print job with error status
+          update(printJobsRef, {
+            progress: 0,
+            printStatus: `Error: ${error.message}`,
+            status: "Error"
+          });
+        });
 
     } catch (error) {
       console.error("❌ Error printing document:", error);
-      setPrintStatus("Print job failed: " + error.message);
-      setPrintProgress(0);
       alert(`Error printing document: ${error.message}`);
       setIsLoading(false);
     }

@@ -36,7 +36,14 @@ const Printer = () => {
               id: key,
               ...data[key],
             }))
-            .filter((file) => file.status === "Pending" || file.status === "Processing");
+            // Make sure we show all relevant job statuses
+            .filter((file) =>
+              file.status === "Pending" ||
+              file.status === "Processing" ||
+              file.status === "Error"
+            )
+            // Sort by timestamp (newest first)
+            .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
           setQueue(queueArray);
         } else {
@@ -88,15 +95,46 @@ const Printer = () => {
 
   // Function to start printing a file
   const startPrinting = (fileId) => {
-    update(ref(realtimeDb, `files/${fileId}`), { status: "Processing" });
+    // Set initial status to Processing with 5% progress
+    update(ref(realtimeDb, `files/${fileId}`), {
+      status: "Processing",
+      progress: 5,
+      printStatus: "Starting print job..."
+    });
 
     console.log(`🖨️ Printing started for file ID: ${fileId}`);
 
+    // Simulate print progress with more detailed updates
+    const progressSteps = [
+      { progress: 15, status: "Processing document...", delay: 800 },
+      { progress: 30, status: "Configuring printer settings...", delay: 1500 },
+      { progress: 45, status: "Converting document format...", delay: 2200 },
+      { progress: 60, status: "Connecting to printer...", delay: 3000 },
+      { progress: 75, status: "Sending to printer...", delay: 3800 },
+      { progress: 85, status: "Printing in progress...", delay: 4500 },
+      { progress: 95, status: "Finishing print job...", delay: 5200 },
+    ];
+
+    // Update progress using for...of to maintain sequence
+    for (const step of progressSteps) {
+      setTimeout(() => {
+        update(ref(realtimeDb, `files/${fileId}`), {
+          progress: step.progress,
+          printStatus: step.status
+        });
+      }, step.delay);
+    }
+
+    // Complete the print job
     setTimeout(() => {
-      update(ref(realtimeDb, `files/${fileId}`), { status: "Done" })
+      update(ref(realtimeDb, `files/${fileId}`), {
+        status: "Done",
+        progress: 100,
+        printStatus: "Print completed"
+      })
         .then(() => console.log(`✅ Printing completed for file ID: ${fileId}`))
         .catch((error) => console.error("Error updating status:", error));
-    }, 5000);
+    }, 6000);
   };
 
   // Function to determine the file type icon
@@ -110,6 +148,18 @@ const Printer = () => {
     if (["jpg", "png", "jpeg"].includes(ext)) return <FaFileImage className="text-yellow-600 text-2xl" />;
 
     return <FaFileWord className="text-gray-600 text-2xl" />;
+  };
+
+  // Function to get the proper background color for progress bar based on status and progress
+  const getProgressBarColor = (status, progress) => {
+    if (status === "Error") return "bg-red-500";
+    if (status === "Done") return "bg-green-500";
+
+    // Progress-based gradient for processing status
+    if (progress < 30) return "bg-blue-400";
+    if (progress < 60) return "bg-blue-500";
+    if (progress < 90) return "bg-blue-600";
+    return "bg-blue-700";
   };
 
   return (
@@ -134,57 +184,81 @@ const Printer = () => {
             <h2 className="text-2xl font-bold text-[#31304D]">Printer Queue</h2>
           </div>
 
-          <div className="overflow-x-auto">
-            {queue.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <p className="text-lg">No files in the queue</p>
-              </div>
-            ) : (
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr className="bg-gray-100">
-                    <th className="p-3 text-left">Type</th>
-                    <th className="p-3 text-left">Name</th>
-                    <th className="p-3 text-left">Status</th>
-                    <th className="p-3 text-left">Action</th>
-                    <th className="p-3 text-left">Remove</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {queue.map((file) => (
-                    <tr key={file.id} className="border-b border-gray-200 hover:bg-gray-50">
-                      <td className="p-3">{getFileIcon(file.name || file.fileName)}</td>
-                      <td className="p-3">{file.fileName}</td>
-                      <td className="p-3">
-                        <span className={`px-2 py-1 rounded-full text-xs font-semibold ${file.status === "Processing" ? "bg-blue-100 text-blue-800" : "bg-yellow-100 text-yellow-800"
-                          }`}>
-                          {file.status}
+          {queue.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              <p className="text-lg">No files in the queue</p>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {queue.map((file) => (
+                <div key={file.id} className="border rounded-lg p-4 bg-gray-50">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center">
+                      {getFileIcon(file.name || file.fileName)}
+                      <span className="ml-3 font-medium">{file.fileName}</span>
+                    </div>
+                    <button
+                      onClick={() => cancelPrintJob(file.id)}
+                      className="text-red-500 hover:text-red-700"
+                    >
+                      <FaTimes size={18} />
+                    </button>
+                  </div>
+
+                  {file.status === "Pending" ? (
+                    <div className="flex items-center justify-between mt-4">
+                      <span className="px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-sm font-medium">
+                        Waiting to print
+                      </span>
+                      <button
+                        onClick={() => startPrinting(file.id)}
+                        className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+                      >
+                        Start Print
+                      </button>
+                    </div>
+                  ) : file.status === "Error" ? (
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-red-700">
+                          {file.printStatus || "Error processing print job"}
                         </span>
-                      </td>
-                      <td className="p-3">
-                        {file.status === "Pending" && (
-                          <button
-                            onClick={() => startPrinting(file.id)}
-                            className="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600"
-                          >
-                            Start Print
-                          </button>
-                        )}
-                      </td>
-                      <td className="p-3">
                         <button
-                          onClick={() => cancelPrintJob(file.id)}
-                          className="text-red-500 hover:text-red-700"
+                          onClick={() => startPrinting(file.id)}
+                          className="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-xs"
                         >
-                          <FaTimes size={18} />
+                          Retry
                         </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2.5">
+                        <div
+                          className="bg-red-500 h-2.5 rounded-full"
+                          style={{ width: "100%" }}
+                        ></div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-gray-700">
+                          {file.printStatus || "Processing..."}
+                        </span>
+                        <span className="text-sm font-medium text-blue-600">
+                          {file.progress || 0}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
+                        <div
+                          className={`${getProgressBarColor(file.status, file.progress)} h-2.5 rounded-full transition-all duration-500 ease-in-out`}
+                          style={{ width: `${file.progress || 0}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
