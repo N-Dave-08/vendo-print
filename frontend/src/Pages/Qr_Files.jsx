@@ -290,7 +290,7 @@ const QRUpload = () => {
             </div>
 
             {/* Balance and Pricing */}
-            <div className="bg-white rounded-lg shadow-sm p-6 mt-auto">
+            <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
               <p className="text-xl font-bold text-[#31304D] mb-3">
                 Balance: <span className="text-green-500">{balance}</span> coins
               </p>
@@ -299,12 +299,69 @@ const QRUpload = () => {
                 Smart Price: <span className="text-green-500">₱{price.toFixed(2)}</span>
               </p>
             </div>
+
+            {/* Print Options */}
+            <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
+              <div className="flex flex-wrap justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-[#31304D]">Print Options</h2>
+
+                <div className="flex items-center space-x-6 my-2">
+                  <div className="flex items-center">
+                    <input
+                      id="color-print"
+                      type="checkbox"
+                      className="w-4 h-4 text-[#31304D] border-gray-300 rounded focus:ring-[#31304D]"
+                      checked={isColor}
+                      onChange={(e) => setIsColor(e.target.checked)}
+                    />
+                    <label htmlFor="color-print" className="ml-2 text-sm font-medium text-gray-700">Color</label>
+                  </div>
+
+                  <div className="flex items-center">
+                    <label htmlFor="copies" className="text-sm font-medium text-gray-700 mr-2">Copies:</label>
+                    <input
+                      id="copies"
+                      type="number"
+                      min="1"
+                      max="99"
+                      className="w-16 p-1 text-sm border border-gray-300 rounded-md"
+                      value={copies}
+                      onChange={(e) => setCopies(parseInt(e.target.value))}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={handlePrint}
+                disabled={!selectedFile.fileName || isLoading}
+                className={`w-full py-3 flex items-center justify-center rounded-lg font-bold text-lg transition-all duration-200 ${!selectedFile.fileName || isLoading
+                  ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                  : "bg-[#31304D] hover:bg-[#41405D] text-white shadow-sm hover:shadow"
+                  }`}
+              >
+                {isLoading ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Printing...
+                  </>
+                ) : (
+                  <>
+                    <FaPrint className="mr-2" />
+                    Print Document
+                  </>
+                )}
+              </button>
+            </div>
           </div>
 
-          {/* Right Side - Uploaded Files and Print (2/3 width) */}
+          {/* Right Side - Uploaded Files (2/3 width) */}
           <div className="flex flex-col h-full md:col-span-2">
             {/* Uploaded Files Section */}
-            <div className="bg-white rounded-lg shadow-sm p-6 mb-6 flex-grow">
+            <div className="bg-white rounded-lg shadow-sm p-6 flex-grow">
               <h2 className="text-xl font-bold text-[#31304D] mb-4 flex justify-between items-center">
                 <span>Uploaded files</span>
                 <span className="text-sm font-normal text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
@@ -399,63 +456,6 @@ const QRUpload = () => {
                   </div>
                 )}
               </div>
-            </div>
-
-            {/* Print Options and Button */}
-            <div className="bg-white rounded-lg shadow-sm p-6">
-              <div className="flex flex-wrap justify-between items-center mb-4">
-                <h2 className="text-xl font-bold text-[#31304D]">Print Options</h2>
-
-                <div className="flex items-center space-x-6 my-2">
-                  <div className="flex items-center">
-                    <input
-                      id="color-print"
-                      type="checkbox"
-                      className="w-4 h-4 text-[#31304D] border-gray-300 rounded focus:ring-[#31304D]"
-                      checked={isColor}
-                      onChange={(e) => setIsColor(e.target.checked)}
-                    />
-                    <label htmlFor="color-print" className="ml-2 text-sm font-medium text-gray-700">Color</label>
-                  </div>
-
-                  <div className="flex items-center">
-                    <label htmlFor="copies" className="text-sm font-medium text-gray-700 mr-2">Copies:</label>
-                    <input
-                      id="copies"
-                      type="number"
-                      min="1"
-                      max="99"
-                      className="w-16 p-1 text-sm border border-gray-300 rounded-md"
-                      value={copies}
-                      onChange={(e) => setCopies(parseInt(e.target.value))}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <button
-                onClick={handlePrint}
-                disabled={!selectedFile.fileName || isLoading}
-                className={`w-full py-3 flex items-center justify-center rounded-lg font-bold text-lg transition-all duration-200 ${!selectedFile.fileName || isLoading
-                  ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-                  : "bg-[#31304D] hover:bg-[#41405D] text-white shadow-sm hover:shadow"
-                  }`}
-              >
-                {isLoading ? (
-                  <>
-                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Printing...
-                  </>
-                ) : (
-                  <>
-                    <FaPrint className="mr-2" />
-                    Print Document
-                  </>
-                )}
-              </button>
             </div>
           </div>
         </div>
