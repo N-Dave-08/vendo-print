@@ -8,11 +8,6 @@ import Usb from "./Pages/Usb";
 import QRUpload from "./Pages/Qr_Files";
 import FileUpload from "./components/qr/file_upload";
 
-// Initialize GroupDocs license
-if (window.GroupDocsViewer) {
-  window.GroupDocsViewer.licenseKey = 'YOUR_LICENSE_KEY'; // Replace with your actual license key
-}
-
 const App = () => {
   return (
     <Router>

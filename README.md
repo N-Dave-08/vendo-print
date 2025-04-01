@@ -1,190 +1,131 @@
 # VendoPrint
 
-A comprehensive printing solution that supports multiple printing methods including USB, Bluetooth, QR code, and Xerox scanning. Built with React and Node.js.
+VendoPrint is a digital printing kiosk application that allows users to upload and print documents from various sources including USB drives and QR codes.
 
-## Features
+## Setup Guide
 
-- **Multiple Printing Methods**
-  - USB Printing
-  - Bluetooth Printing
-  - QR Code Printing
-  - Xerox Scanning & Printing
-- **Smart Pricing System**
-  - Automatic price calculation based on:
-    - Page size
-    - Color/Black & White
-    - Number of copies
-    - Page orientation
-- **Admin Dashboard**
-  - Set pricing rules
-  - Monitor print jobs
-  - Manage system settings
-- **Coin Management System**
-  - Real-time coin balance tracking
-  - Automatic coin deduction
-  - Top-up functionality
+### Prerequisites
 
-## Prerequisites
+- Node.js (v14 or newer)
+- npm
+- LibreOffice (for DOCX to PDF conversion with preserved formatting)
 
-- Node.js (v14 or higher)
-- npm or yarn
-- Windows OS (for printer functionality)
-- Printer with USB/Bluetooth connectivity
-- Scanner (for Xerox functionality)
+### LibreOffice Installation
 
-## Installation
+For proper DOCX to PDF conversion with preserved formatting, you need to install LibreOffice:
 
-1. Clone the repository:
+#### Windows
 
-```bash
-git clone https://github.com/N-Dave-08/vendo-print.git
-cd vendo-print
-```
+1. Download LibreOffice from the [official website](https://www.libreoffice.org/download/download/)
+2. Run the installer and select "Typical" installation
+3. After installation, add LibreOffice to your system PATH:
+   - Right-click on "This PC" or "My Computer" and select "Properties"
+   - Click on "Advanced system settings"
+   - Click the "Environment Variables" button
+   - In the "System variables" section, find the "Path" variable and click "Edit"
+   - Click "New" and add the path to the LibreOffice program directory:
+     - Typically: `C:\Program Files\LibreOffice\program`
+   - Click "OK" on all dialogs to save changes
+4. Verify installation by opening Command Prompt and typing:
+   ```
+   where soffice
+   ```
+   You should see the path to the LibreOffice executable
 
+#### macOS
+
+1. Download LibreOffice from the [official website](https://www.libreoffice.org/download/download/)
+2. Open the downloaded .dmg file and drag LibreOffice to the Applications folder
+3. Open Terminal and create a symlink to make LibreOffice accessible from the command line:
+   ```
+   sudo ln -s /Applications/LibreOffice.app/Contents/MacOS/soffice /usr/local/bin/soffice
+   ```
+4. Verify installation by opening Terminal and typing:
+   ```
+   which soffice
+   ```
+   You should see `/usr/local/bin/soffice`
+
+#### Linux
+
+1. Install LibreOffice using your package manager:
+   - Ubuntu/Debian: `sudo apt-get install libreoffice`
+   - Fedora: `sudo dnf install libreoffice`
+   - Arch Linux: `sudo pacman -S libreoffice-still`
+2. Verify installation by opening Terminal and typing:
+   ```
+   which soffice
+   ```
+   You should see the path to the LibreOffice executable
+
+### Setting Up the Project
+
+1. Clone the repository
 2. Install dependencies:
 
 ```bash
 # Install backend dependencies
+cd backend
 npm install
 
 # Install frontend dependencies
-cd frontend
+cd ../frontend
 npm install
 ```
 
-3. Set up environment variables:
-   - Create `.env` file in the root directory
-   - Create `.env` file in the backend directory
-   - Add necessary environment variables (see `.env.example`)
-
-## Running the Application
-
-1. Start the backend server:
+3. Start the backend server:
 
 ```bash
-# From the root directory
-npm start
+cd backend
+node server.js
 ```
 
-2. Start the frontend development server:
+4. Start the frontend development server:
 
 ```bash
-# From the frontend directory
+cd frontend
 npm run dev
 ```
 
-3. Access the application:
-   - Frontend: http://localhost:5173
-   - Backend API: http://localhost:5000
+5. Access the application at `http://localhost:5173`
 
-## Project Structure
+## Features
 
-```
-vendo-print/
-├── backend/
-│   ├── controller/
-│   ├── printer/
-│   ├── routes/
-│   └── server.js
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   ├── Pages/
-│   │   └── utils/
-│   └── package.json
-└── package.json
-```
+- Upload files from USB drives
+- Scan and upload documents via QR code
+- DOCX to PDF conversion with preserved formatting
+- Print preview with page range selection
+- Multiple printer support
 
-## API Endpoints
+## Troubleshooting
 
-- `/api/printers` - Get available printers
-- `/api/xerox/preview` - Get scanned document preview
-- `/api/xerox/check-scanner` - Check scanner availability
-- `/api/xerox/print` - Print scanned document
-- `/api/usb/print` - Print from USB
-- `/api/bluetooth/print` - Print via Bluetooth
-- `/api/qr/print` - Print from QR code
+### DOCX Conversion Issues
 
-## Contributing
+If you experience issues with DOCX to PDF conversion:
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+1. Make sure LibreOffice is properly installed
+2. Verify that `soffice` command is available in your PATH
+   - Test by running `where soffice` (Windows) or `which soffice` (Mac/Linux) in your terminal
+3. If using Windows, try running LibreOffice as administrator once to ensure it has proper permissions
+4. Check the backend server logs for any specific errors related to LibreOffice
+5. If LibreOffice is not available, the system will fall back to a simplified text-based conversion, but formatting will be limited
 
-## Managing Changes Between Laptops
+### Backend Server Connection Problems
 
-### Pushing Changes from Source Laptop
+If the frontend cannot connect to the backend:
 
-1. Commit your changes:
+1. Make sure the backend server is running on port 5000
+2. Check that your firewall is not blocking connections to port 5000
+3. Verify that the backend server logs show successful startup
+4. If using a different port, update the frontend code accordingly
 
-```bash
-git add .
-git commit -m "Your commit message"
-```
+### File Upload Problems
 
-2. Push to the remote repository:
+If file uploads fail:
 
-```bash
-git push origin <branch-name>
-```
-
-### Fetching Changes on Target Laptop
-
-1. Fetch and pull changes:
-
-```bash
-git fetch origin
-git pull origin <branch-name>
-```
-
-### Managing Work in Progress
-
-If you have ongoing changes on the target laptop:
-
-1. Stash your current changes:
-
-```bash
-# Save changes with a description
-git stash save "your message here"
-
-# Or stash all changes including untracked files
-git stash -u
-```
-
-2. View stashed changes:
-
-```bash
-git stash list
-```
-
-3. Pull the new changes:
-
-```bash
-git pull origin <branch-name>
-```
-
-4. Reapply your stashed changes:
-
-```bash
-# Apply most recent stash and keep it in the list
-git stash apply
-
-# Or apply and remove the stash
-git stash pop
-
-# Apply specific stash
-git stash apply stash@{n}
-```
-
-5. Resolve any conflicts if they occur
-
-### Additional Stash Commands
-
-- Show stash contents: `git stash show`
-- Remove specific stash: `git stash drop stash@{n}`
-- Clear all stashes: `git stash clear`
+1. Check that your Firebase configuration is correct
+2. Ensure you have proper storage permissions in Firebase
+3. Verify network connectivity
 
 ## License
 

@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDF Page Counter and Color Detector</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+  </head>
+  <body>
+    <div id="status">Ready for analysis...</div>
+    <canvas id="pdf-canvas" style="display: none"></canvas>
+    <script>
+      // Initialize PDF.js worker
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+      // Function to detect colored pixels in an image
+      function analyzeColorContent(imageData) {
+        const data = imageData.data;
+        const length = data.length;
+        let colorCount = 0;
+        const threshold = 30; // Color difference threshold
+        const sampleSize = 40; // Check every 40th pixel for performance
+        const totalPixels = Math.floor(length / (4 * sampleSize)); // Total pixels we'll check
+
+        for (let i = 0; i < length; i += 4 * sampleSize) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+
+          // Check if the pixel is not grayscale
+          const max = Math.max(
+            Math.abs(r - g),
+            Math.abs(r - b),
+            Math.abs(g - b)
+          );
+          if (max > threshold) {
+            colorCount++;
+          }
+        }
+
+        const colorPercentage = (colorCount / totalPixels) * 100;
+        return {
+          hasColor: colorCount > 50,
+          colorCount: colorCount,
+          totalPixels: totalPixels,
+          colorPercentage: colorPercentage.toFixed(2),
+        };
+      }
+
+      // Handle PDF loading and analysis
+      async function loadAndAnalyzePDF(pdfUrl, fileName) {
+        if (!pdfUrl) {
+          console.error('No PDF URL provided');
+          return;
+        }
+
+        console.log(`🔍 Starting color analysis for: ${fileName}`);
+
+        try {
+          const proxyUrl = `http://localhost:5000/api/proxy-pdf?url=${encodeURIComponent(
+            pdfUrl
+          )}`;
+
+          console.log('🔄 Loading PDF through proxy:', proxyUrl);
+
+          const loadingTask = pdfjsLib.getDocument({
+            url: proxyUrl,
+            withCredentials: true,
+            cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.4.120/cmaps/',
+            cMapPacked: true,
+            verbosity: 0,
+          });
+
+          loadingTask.onProgress = function (progress) {
+            const percent = (progress.loaded / progress.total) * 100;
+            document.getElementById(
+              'status'
+            ).innerText = `Loading PDF... ${Math.round(percent)}%`;
+          };
+
+          const pdf = await loadingTask.promise;
+          const canvas = document.getElementById('pdf-canvas');
+          const ctx = canvas.getContext('2d');
+
+          const totalPages = pdf.numPages;
+          console.log(`📄 Total pages in document: ${totalPages}`);
+
+          let coloredPages = 0;
+          const pageAnalysis = [];
+
+          // Analyze each page for color
+          for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
+            console.log(`\n📃 Analyzing page ${pageNum}...`);
+
+            const page = await pdf.getPage(pageNum);
+            const viewport = page.getViewport({ scale: 0.5 }); // Lower scale for faster processing
+
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+
+            await page.render({
+              canvasContext: ctx,
+              viewport: viewport,
+            }).promise;
+
+            const imageData = ctx.getImageData(
+              0,
+              0,
+              canvas.width,
+              canvas.height
+            );
+
+            const analysis = analyzeColorContent(imageData);
+
+            if (analysis.hasColor) {
+              coloredPages++;
+              console.log(`🎨 Page ${pageNum} contains color:`);
+              console.log(`   - Colored pixels: ${analysis.colorCount}`);
+              console.log(`   - Color coverage: ${analysis.colorPercentage}%`);
+            } else {
+              console.log(`⚫ Page ${pageNum} is grayscale/black & white`);
+            }
+
+            pageAnalysis.push({
+              pageNumber: pageNum,
+              ...analysis,
+            });
+
+            // Update status
+            document.getElementById(
+              'status'
+            ).innerText = `Analyzing page ${pageNum} of ${totalPages}...`;
+          }
+
+          console.log('\n📊 Color Analysis Summary:');
+          console.log(`   - Total pages: ${totalPages}`);
+          console.log(`   - Pages with color: ${coloredPages}`);
+          console.log(
+            `   - Color percentage: ${(
+              (coloredPages / totalPages) *
+              100
+            ).toFixed(2)}% of document`
+          );
+
+          // Send results back to parent
+          window.parent.postMessage(
+            {
+              type: 'colorAnalysisComplete',
+              results: {
+                fileUrl: pdfUrl,
+                pageCount: totalPages,
+                hasColoredPages: coloredPages > 0,
+                coloredPageCount: coloredPages,
+                pageAnalysis: pageAnalysis,
+                fileName: fileName,
+              },
+            },
+            '*'
+          );
+        } catch (error) {
+          console.error('❌ PDF analysis error:', error);
+          window.parent.postMessage(
+            {
+              type: 'colorAnalysisComplete',
+              results: {
+                error: error.message,
+                hasColoredPages: false,
+                coloredPages: [],
+              },
+            },
+            '*'
+          );
+        }
+      }
+
+      // Listen for messages from parent window
+      window.addEventListener('message', function (event) {
+        if (event.data.type === 'ping') {
+          // Respond to ping with ready message
+          window.parent.postMessage({ type: 'proxyReady' }, '*');
+        } else if (event.data.type === 'analyzePDF') {
+          // Start analysis when requested
+          loadAndAnalyzePDF(event.data.pdfUrl, event.data.filename);
+        }
+      });
+
+      // Signal that we're ready when the page loads
+      window.onload = function () {
+        document.getElementById('status').innerText = 'Ready for analysis...';
+        window.parent.postMessage({ type: 'proxyReady' }, '*');
+      };
+    </script>
+  </body>
+</html>

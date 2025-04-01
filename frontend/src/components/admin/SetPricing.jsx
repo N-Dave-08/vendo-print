@@ -21,8 +21,8 @@ const SetPricing = () => {
 
   const handleSave = () => {
     const pricingRef = dbRef(db, 'pricing');
-    set(pricingRef, { 
-      colorPrice: Number(colorPrice), 
+    set(pricingRef, {
+      colorPrice: Number(colorPrice),
       bwPrice: Number(bwPrice)
     })
       .then(() => alert('Pricing saved successfully!'))

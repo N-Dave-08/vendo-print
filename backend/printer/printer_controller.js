@@ -12,7 +12,28 @@ import util from 'util';
 import { fileURLToPath } from 'url';
 import { PDFDocument, rgb, degrees } from 'pdf-lib';
 import os from 'os';
+import { initializeApp } from 'firebase/app';
+import { getDatabase, ref as dbRef, update } from 'firebase/database';
+import { firebaseConfig } from '../firebase/firebase-config.js';
 
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+// Helper function to update print progress
+const updatePrintProgress = async (printJobId, progress, status) => {
+  if (!printJobId) return;
+
+  try {
+    await update(dbRef(db, `files/${printJobId}`), {
+      progress,
+      printStatus: status,
+      status: progress >= 100 ? "Done" : "Processing"
+    });
+  } catch (error) {
+    console.error("Error updating print progress:", error);
+  }
+};
 
 const execPromise = util.promisify(exec);
 
@@ -91,6 +112,8 @@ export const printFileWithOSCommands = async (filePath, printerName, isColor, op
     duplex: options.duplex || 'none',
     paperSource: options.paperSource || 'auto',
     quality: options.quality || 'normal',
+    hasColorContent: options.hasColorContent || false,
+    colorPageCount: options.colorPageCount || 0,
     ...options
   };
 
@@ -103,6 +126,9 @@ export const printFileWithOSCommands = async (filePath, printerName, isColor, op
     Write-Host '======== PRINT DEBUG INFO ========';
     Write-Host 'Printer: $printer';
     Write-Host 'File: $file';
+    Write-Host 'Color Mode: ${isColor ? 'Color' : 'Black & White'}';
+    Write-Host 'Has Color Content: ${printOptions.hasColorContent ? 'Yes' : 'No'}';
+    Write-Host 'Color Pages Count: ${printOptions.colorPageCount}';
     
     # Check if file exists and is readable
     if (Test-Path -Path $file) {
@@ -147,8 +173,15 @@ export const printFileWithOSCommands = async (filePath, printerName, isColor, op
           $devMode = $objPrinter.GetDevMode(1);
           if ($devMode -ne $null) {
             # Set color mode (1 = Color, 2 = Monochrome)
-            $devMode.Color = ${isColor ? '1' : '2'};
-            Write-Host 'Setting color mode to:' ${isColor ? 'Color' : 'Monochrome'};
+            # If the document has color and user selected color printing, use color mode
+            $colorMode = 2; # Default to Monochrome
+            if (${isColor} -eq $true) {
+              $colorMode = 1; # Use Color mode
+              Write-Host 'Setting color mode to: Color (user requested)';
+            } else {
+              Write-Host 'Setting color mode to: Monochrome (user requested)';
+            }
+            $devMode.Color = $colorMode;
             
             # Set duplex mode (1 = None, 2 = Long Edge, 3 = Short Edge)
             $duplexMode = 1; # Default to simplex
@@ -279,305 +312,121 @@ export const printFileWithOSCommands = async (filePath, printerName, isColor, op
  * @returns {Promise<string>} - Output from the print command
  */
 export const printWordDocument = async (filePath, printerName, isColor = true, selectedSize = "", orientation = "portrait") => {
-  // Map paper sizes to Word's WdPaperSize values
-  const paperSizeMap = {
-    "Letter 8.5 x 11": 0,      // wdPaperLetter
-    "A4 8.3 x 11.7": 9,        // wdPaperA4
-    "Legal 8.5 x 14": 5,       // wdPaperLegal
-    "Executive 7.25 x 10.5": 7, // wdPaperExecutive
-    "Tabloid 11 x 17": 3,      // wdPaperTabloid
-    "Statement 5.5 x 8.5": 6,  // wdPaperStatement
-    "B5 6.9 x 9.8": 13,        // wdPaperB5
-    "Short Bond": 1,           // wdPaperLetterSmall
-    "Custom": 41,              // wdPaperCustom
-  };
-
-  // Get paper size code
-  const paperSizeCode = paperSizeMap[selectedSize] !== undefined ? paperSizeMap[selectedSize] : -1;
-
-  // Get orientation code (1 = portrait, 2 = landscape)
-  const orientationCode = orientation.toLowerCase() === "landscape" ? 2 : 1;
-
-  // Create a PowerShell script that handles Word printing more directly
-  const command = `powershell.exe -Command "$ErrorActionPreference = 'Stop';
+  try {
+    // Create the PowerShell script content
+    const scriptContent = `
+$ErrorActionPreference = 'Stop'
 try {
-  # Parameters
-  $printer = '${printerName}';
-  $file = '${filePath.replace(/\\/g, '\\\\')}';
-  $isColor = $${isColor};
-  $paperSize = ${paperSizeCode};
-  $orientation = ${orientationCode};
-  
-  # Verify file existence
-  if (-not (Test-Path $file)) {
-    Write-Error 'File not found at the specified path';
-    exit 2;
-  } else {
-    $fileInfo = Get-Item $file;
-    Write-Host 'File exists: $file, Size: ' + $fileInfo.Length + ' bytes';
-  }
-  
-  # Log start of process
-  Write-Host 'Starting printing process for $file to printer $printer';
-  Write-Host 'Paper Size: ${selectedSize} (Code: $paperSize), Orientation: ${orientation} (Code: $orientation), Color: ${isColor}';
-  
-  # Verify printer
-  try {
-    $printerObj = Get-Printer -Name $printer -ErrorAction Stop;
-    Write-Host 'Printer verified: $printer, Status: ' + $printerObj.PrinterStatus;
+    # Parameters
+    $printer = '${printerName}'
+    $file = '${filePath}'
+    $isColor = $${isColor}
     
-    # Check if printer is ready
-    if ($printerObj.PrinterStatus -ne 3) { # 3 is 'Ready'
-      Write-Warning 'Printer is not in Ready state. Status: ' + $printerObj.PrinterStatus;
+    # Map paper sizes to Word constants
+    $paperSizeMap = @{
+        "Short Bond" = 1      # wdPaperLetterSmall
+        "Letter" = 0          # wdPaperLetter (8.5 x 11)
+        "A4" = 9             # wdPaperA4 (8.27 x 11.69)
+        "Legal" = 5          # wdPaperLegal (8.5 x 14)
     }
-  } catch {
-    Write-Warning 'Could not verify printer status: ' + $_.Exception.Message;
-  }
-  
-  # Create print spooler service diagnostic
-  $spoolerService = Get-Service -Name Spooler;
-  Write-Host 'Print Spooler Service Status: ' + $spoolerService.Status;
-  if ($spoolerService.Status -ne 'Running') {
-    Write-Warning 'Print Spooler service is not running. Attempting to start...';
-    Start-Service -Name Spooler;
-    Start-Sleep -Seconds 2;
-    $spoolerService = Get-Service -Name Spooler;
-    Write-Host 'Print Spooler Service Status after restart attempt: ' + $spoolerService.Status;
-  }
-  
-  # Set up printer driver and configuration
-  try {
-    # Set default printer first using WMI
-    Write-Host 'Configuring printer settings...';
-    $wmiPrinter = Get-WmiObject -Query "SELECT * FROM Win32_Printer WHERE Name = '$printer'";
-    if ($wmiPrinter -ne $null) {
-      # Set as default
-      $result = $wmiPrinter.SetDefaultPrinter();
-      Write-Host 'Set as default printer result: ' + $result;
-      
-      # Configure printer if possible
-      $devMode = $wmiPrinter.GetDevMode(1);
-      if ($devMode -ne $null) {
-        # Set color mode (1 = Color, 2 = Monochrome)
-        if ($isColor) {
-          $devMode.Color = 1; # Color
-        } else {
-          $devMode.Color = 2; # Monochrome
-        }
-        
-        # Apply settings
-        $wmiPrinter.SetDevMode($devMode);
-        Write-Host 'Printer settings applied via WMI';
-      }
+    
+    # Default to Letter if selected size isn't available
+    $paperSize = if ($paperSizeMap.ContainsKey("${selectedSize}")) { 
+        $paperSizeMap["${selectedSize}"]
+    } else { 
+        0  # Default to Letter
     }
-  } catch {
-    Write-Warning 'Could not configure printer via WMI: ' + $_.Exception.Message;
-  }
-  
-  # Use the Word COM object for printing - more direct approach
-  try {
-    # Set the default printer first - this helps with reliability
-    $wshNetwork = New-Object -ComObject WScript.Network;
-    $originalPrinter = $wshNetwork.EnumPrinterConnections() | Select-Object -First 1;
-    Write-Host 'Original default printer: ' + $originalPrinter;
-    $wshNetwork.SetDefaultPrinter($printer);
-    Write-Host 'Default printer set to: ' + $printer;
     
-    # Initialize Word
-    Write-Host 'Initializing Word...';
-    $word = New-Object -ComObject Word.Application;
-    $word.Visible = $false;
-    
+    # Word orientation constants: wdOrientPortrait = 0, wdOrientLandscape = 1
+    $orientation = if ('${orientation}'.ToLower() -eq 'portrait') { 0 } else { 1 }
+    Write-Host "Setting orientation to: $(if($orientation -eq 0){'Portrait'}else{'Landscape'})"
+
+    # Verify file existence
+    if (-not (Test-Path $file)) {
+        Write-Error 'File not found at the specified path'
+        exit 2
+    }
+
+    # Use the Word COM object for printing
+    $word = New-Object -ComObject Word.Application
+    $word.Visible = $false
+
     # Open the document
-    Write-Host 'Opening document...';
-    $doc = $word.Documents.Open($file);
-    Write-Host 'Document opened successfully';
-    
-    # Apply paper size and orientation if specified
-    if ($paperSize -ge 0 -or $orientation -gt 0) {
-      Write-Host 'Applying document formatting...';
-      $sections = $doc.Sections;
-      foreach ($section in $sections) {
-        $pageSetup = $section.PageSetup;
-        
-        # Set paper size if specified
-        if ($paperSize -ge 0) {
-          Write-Host "Setting paper size to: $paperSize";
-          $pageSetup.PaperSize = $paperSize;
-        }
-        
-        # Set orientation if specified
-        if ($orientation -gt 0) {
-          Write-Host "Setting orientation to: $orientation";
-          $pageSetup.Orientation = $orientation;
-        }
-      }
-      
-      Write-Host 'Document formatting applied';
-    }
-    
-    # Set active printer directly
-    Write-Host 'Setting printer to: $printer';
-    $word.ActivePrinter = $printer;
-    Write-Host 'Active printer is now: ' + $word.ActivePrinter;
-    
-    # Print the document with explicit parameters
-    Write-Host 'Sending to printer...';
-    $doc.PrintOut(
-      Copies:=1,
-      Pages:='',
-      PageType:=0,
-      PrintToFile:=$false,
-      Collate:=$true,
-      Background:=$false,
-      PrintZoomColumn:=0,
-      PrintZoomRow:=0,
-      PrintZoomPaperWidth:=0,
-      PrintZoomPaperHeight:=0
-    );
-    
-    # Wait for printing to complete
-    Write-Host 'Waiting for print job to complete...';
-    Start-Sleep -Seconds 5;
-    
-    # Verify the print job was submitted by checking the queue
-    $queuedJobs = Get-PrintJob -PrinterName $printer -ErrorAction SilentlyContinue;
-    if ($null -ne $queuedJobs -and @($queuedJobs).Count -gt 0) {
-      Write-Host 'Print job found in queue, printing is in progress.';
-    } else {
-      Write-Host 'No print jobs found in queue. Trying alternative printing method...';
-      
-      # Try direct printing as fallback
-      try {
-        Write-Host 'Using direct Word print method...';
-        $selection = $word.Selection;
-        $selection.WholeStory();
-        $selection.PrintOut(
-          Copies:=1,
-          Pages:='',
-          PageType:=0,
-          PrintToFile:=$false,
-          Collate:=$true,
-          Background:=$false
-        );
-        Write-Host 'Direct print command sent.';
-        Start-Sleep -Seconds 5;
-      } catch {
-        Write-Warning 'Direct print method failed: ' + $_.Exception.Message;
-        
-        # Try external printing as a last resort
-        Write-Host 'Attempting to print using shell execute...';
-        $shell = New-Object -ComObject WScript.Shell;
-        $shell.Run("rundll32 mshtml.dll,PrintHTML \`"$file\`"");
-        Write-Host 'Shell print command sent.';
-        Start-Sleep -Seconds 5;
-      }
-    }
-    
-    # Clean up
-    Write-Host 'Closing Word...';
-    $doc.Close([ref]$false);
-    $word.Quit();
-    
-    # Release COM objects
-    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($doc) | Out-Null;
-    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($word) | Out-Null;
-    [System.GC]::Collect();
-    [System.GC]::WaitForPendingFinalizers();
-    
-    # Restore original default printer
-    $wshNetwork.SetDefaultPrinter($originalPrinter);
-    Write-Host 'Default printer restored to: ' + $originalPrinter;
-    
-    Write-Host 'Word document sent to printer successfully';
-  } catch {
-    Write-Error ('Error in Word printing: ' + $_.Exception.Message);
-    Write-Error ('At: ' + $_.ScriptStackTrace);
-    
-    # Try VBS method as fallback
+    $doc = $word.Documents.Open($file)
+
+    # Try to set paper size and orientation
     try {
-      Write-Host 'Attempting VBS print method as fallback...';
-      $vbsCode = @"
-Set objShell = CreateObject("Shell.Application")
-Set objFolder = objShell.Namespace("$([System.IO.Path]::GetDirectoryName($file))")
-Set objFolderItem = objFolder.ParseName("$([System.IO.Path]::GetFileName($file))")
-
-' Set default printer
-Set objNetwork = CreateObject("WScript.Network")
-strOriginalPrinter = objNetwork.GetDefaultPrinterName
-objNetwork.SetDefaultPrinter "$printer"
-
-' Use direct ShellExecute to print
-objFolderItem.InvokeVerb "Print"
-
-' Wait for print operation to be processed
-WScript.Sleep 6000
-
-' Restore original printer
-objNetwork.SetDefaultPrinter strOriginalPrinter
-
-WScript.Echo "Print command sent through VBScript"
-"@
-      $vbsPath = [System.IO.Path]::GetTempFileName() + ".vbs"
-      Set-Content -Path $vbsPath -Value $vbsCode
-      
-      Write-Host "Executing VBS script at $vbsPath"
-      $vbsOutput = cscript //NoLogo $vbsPath
-      Write-Host "VBS Output: $vbsOutput"
-      
-      Remove-Item $vbsPath -Force
-      Write-Host "VBS print method executed"
+        $sections = $doc.Sections
+        foreach ($section in $sections) {
+            $pageSetup = $section.PageSetup
+            try {
+                $pageSetup.PaperSize = $paperSize
+            } catch {
+                Write-Warning "Could not set paper size, using printer default"
+            }
+            
+            try {
+                Write-Host "Applying orientation setting..."
+                $pageSetup.Orientation = $orientation
+                Write-Host "Orientation set successfully"
+            } catch {
+                Write-Warning "Could not set orientation: $_"
+            }
+        }
     } catch {
-      Write-Error ('Error in VBS fallback: ' + $_.Exception.Message);
-      exit 1;
+        Write-Warning "Could not set page setup, using printer defaults: $_"
     }
-  }
-  
-  # Check print queue with the printer name parameter
-  try {
-    Write-Host 'Checking print queue...';
-    $queuedJobs = Get-PrintJob -PrinterName $printer -ErrorAction SilentlyContinue;
-    
-    if ($null -ne $queuedJobs) {
-      Write-Host 'Current print queue count: ' + @($queuedJobs).Count;
-      if (@($queuedJobs).Count -gt 0) {
-        Write-Host 'Print jobs in queue:';
-        $queuedJobs | Format-Table DocumentName, JobStatus, Pages;
-      } else {
-        Write-Host 'No print jobs in queue.';
-      }
-    } else {
-      Write-Host 'No print jobs found or unable to access print queue.';
-    }
-  } catch {
-    Write-Warning ('Could not check print queue: ' + $_.Exception.Message);
-  }
-  
-  Write-Host 'Print operation completed';
-} catch {
-  Write-Error ('Error in printing script: ' + $_.Exception.Message);
-  Write-Error ('Stack trace: ' + $_.ScriptStackTrace);
-  exit 1;
-}"`;
 
-  try {
-    console.log('Executing Word printing command...');
-    const { stdout, stderr } = await execPromise(command);
-    console.log('Word printing output:', stdout);
+    # Set printer and print
+    $word.ActivePrinter = $printer
+    
+    # Print document with explicit settings
+    Write-Host "Sending print command..."
+    $doc.PrintOut()
+
+    # Wait briefly for print job to start
+    Start-Sleep -Seconds 2
+
+    # Clean up
+    $doc.Close($false)
+    $word.Quit()
+    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($doc) | Out-Null
+    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($word) | Out-Null
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
+
+    Write-Host "Print job sent successfully"
+    exit 0
+} catch {
+    Write-Error $_.Exception.Message
+    exit 1
+}
+`
+
+    // Save the script to a temporary file
+    const scriptPath = path.join(__dirname, 'temp', `print_${Date.now()}.ps1`)
+    await fs.promises.writeFile(scriptPath, scriptContent)
+
+    // Execute the script
+    const { stdout, stderr } = await execPromise(`powershell.exe -ExecutionPolicy Bypass -File "${scriptPath}"`)
+
+    // Clean up the temporary script file
+    try {
+      await fs.promises.unlink(scriptPath)
+    } catch (err) {
+      console.warn('Could not delete temporary script file:', err)
+    }
 
     if (stderr) {
-      console.warn('Warning during Word print operation:', stderr);
+      throw new Error(stderr)
     }
 
-    // Check if the output suggests printing failed
-    if (stderr && !stdout.includes('sent to printer successfully') && !stdout.includes('Print command sent')) {
-      throw new Error(`Printing failed: ${stderr}`);
-    }
+    console.log('Print output:', stdout)
+    return { success: true, message: 'Print job sent successfully' }
 
-    return stdout;
   } catch (error) {
-    console.error('Error printing Word document:', error);
-    throw error;
+    console.error('Print error:', error)
+    throw error
   }
 };
 
@@ -822,7 +671,7 @@ WScript.Echo "Print operation completed"`;
  * @param {boolean} isColor - Whether to print in color or monochrome
  * @returns {Promise<string>} - Output from the print command
  */
-export const printImageFile = async (filePath, printerName, isColor = true) => {
+export const printImageFile = async (filePath, printerName, isColor = true, orientation = 'portrait') => {
   const platform = os.platform();
 
   // CRITICAL FIX: Trim trailing spaces from all paths
@@ -840,298 +689,85 @@ export const printImageFile = async (filePath, printerName, isColor = true) => {
 $filePath = "${filePath.replace(/\\/g, '\\\\').trim()}";
 $printerName = "${printerName.trim()}";
 $isColor = $${isColor};
+$orientation = '${orientation}';
 
 Write-Host "===== SILENT PRINT JOB STARTED =====";
 Write-Host "File: $filePath";
 Write-Host "Printer: $printerName";
 Write-Host "Color: $isColor";
+Write-Host "Orientation: $orientation";
 
-# File existence checks remain the same
-if (-not (Test-Path -Path $filePath)) {
-  # Try with alternate path formats in case of path issues
-  $altPath = $filePath.Trim();
-  Write-Host "Original file not found, trying alternate path: $altPath";
-  
-  if (-not (Test-Path -Path $altPath)) {
-    # Try with literal path
-    if (-not (Test-Path -LiteralPath $filePath)) {
-      Write-Host "Listing directory contents for troubleshooting:";
-      Get-ChildItem -Path "${path.dirname(filePath).replace(/\\/g, '\\\\')}";
-      Write-Error "File not found: $filePath";
-      exit 1;
-    } else {
-      Write-Host "File found using LiteralPath";
-      $filePath = $filePath.Trim();
-    }
-  } else {
-    Write-Host "File found using trimmed path";
-    $filePath = $altPath;
-  }
-}
+# Load required assemblies
+Add-Type -AssemblyName System.Drawing;
+Add-Type -AssemblyName System.Windows.Forms;
 
-$fileInfo = Get-Item -LiteralPath $filePath;
-Write-Host "File exists! Size: $($fileInfo.Length) bytes";
-Write-Host "Full path: $($fileInfo.FullName)";
-
-# Printer status checks remain the same
 try {
-  $printerObj = Get-Printer -Name $printerName -ErrorAction Stop;
-  $statusCode = $printerObj.PrinterStatus;
-  $statusMap = @{
-    1="Other"; 2="Unknown"; 3="Ready"; 4="Printing"; 
-    5="Warmup"; 6="Stopped"; 7="Offline"
-  };
-  $statusText = $statusMap[$statusCode];
-  Write-Host "Printer status: $statusText ($statusCode)";
-  
-  # Printer port checking remains the same
-  $printerPort = $printerObj.PortName;
-  Write-Host "Printer port: $printerPort";
-  
-  try {
-    $portInfo = Get-PrinterPort -Name $printerPort -ErrorAction Stop;
-    Write-Host "Port type: $($portInfo.Description)";
+    # Create PrintDocument
+    $printDoc = New-Object System.Drawing.Printing.PrintDocument;
+    $printDoc.PrinterSettings.PrinterName = $printerName;
     
-    if ($printerPort -like "IP_*" -or $printerPort -like "TCP_*") {
-      $ipAddress = $portInfo.PrinterHostAddress;
-      Write-Host "Testing printer connection at $ipAddress";
-      $pingResult = Test-Connection -ComputerName $ipAddress -Count 1 -Quiet;
-      Write-Host "Printer ping result: $pingResult";
-    }
-  } catch {
-    Write-Warning "Could not get printer port details: $_";
-  }
-  
-  if ($statusCode -ne 3 -and $statusCode -ne 4) {
-    Write-Warning "Printer is not in Ready or Printing state - will try aggressive printing methods";
-    $forcePrint = $true;
-  } else {
-    $forcePrint = $false;
-  }
-} catch {
-  Write-Warning "Could not check printer status: $_";
-  $forcePrint = $true; # Force aggressive printing if we can't determine status
-}
-
-# Save default printer
-$wshNetwork = New-Object -ComObject WScript.Network;
-$oldDefault = $wshNetwork.EnumPrinterConnections() | Select-Object -First 1;
-Write-Host "Default printer was: $oldDefault";
-$wshNetwork.SetDefaultPrinter($printerName);
-Write-Host "Default printer now: $printerName";
-
-# Spooler restart check remains the same
-if ($forcePrint) {
-  Write-Host "Attempting to restart print spooler service...";
-  try {
-    Restart-Service -Name Spooler -Force -ErrorAction SilentlyContinue;
-    Start-Sleep -Seconds 5;
-    Write-Host "Print spooler restarted";
+    # Load the image
+    $image = [System.Drawing.Image]::FromFile($filePath);
     
-    $printerObj = Get-Printer -Name $printerName -ErrorAction SilentlyContinue;
-    if ($printerObj) {
-      Write-Host "Printer status after spooler restart: $($statusMap[$printerObj.PrinterStatus]) ($($printerObj.PrinterStatus))";
-    }
-  } catch {
-    Write-Warning "Could not restart print spooler: $_";
-  }
-}
-
-# REARRANGED PRINTING METHODS - Start with silent methods first
-# METHOD 1: Direct System.Drawing printing (silent)
-Write-Host "Method 1: Using direct .NET printing via System.Drawing...";
-$method1Success = $false;
-try {
-  Add-Type -AssemblyName System.Drawing;
-  Add-Type -AssemblyName System.Windows.Forms;
-  
-  # Load image file
-  $image = [System.Drawing.Image]::FromFile($filePath);
-  
-  # Create PrintDocument object with print settings
-  $printDoc = New-Object System.Drawing.Printing.PrintDocument;
-  $printDoc.PrinterSettings.PrinterName = $printerName;
-  
-  # Apply color setting
-  if (-not $isColor) {
-    # Set to black and white if specified
-    try { $printDoc.DefaultPageSettings.Color = $false; } catch { Write-Warning "Could not set color mode" }
-  }
-  
-  # Create handler for PrintPage event
-  $printPage = {
-    param($sender, $args)
-    # Scale image to fit the page while maintaining aspect ratio
-    $args.Graphics.DrawImage($image, $args.PageBounds);
-  };
-  
-  # Register event handler
-  $printDoc.add_PrintPage($printPage);
-  
-  # Print document silently
-  Write-Host "Sending direct print command via .NET";
-  $printDoc.Print();
-  
-  # Wait and check queue
-  Start-Sleep -Seconds 3;
-  try {
-    $queue = Get-PrintJob -PrinterName $printerName;
-    if ($queue) {
-      Write-Host "Print job found in queue after Method 1";
-      Write-Host "Job count: $($queue.Count)";
-      foreach ($job in $queue) {
-        Write-Host "Job: $($job.JobId) - $($job.DocumentName) - $($job.JobStatus)";
-      }
-      $method1Success = $true;
-    } else {
-      Write-Host "No print jobs found in queue after Method 1";
-    }
-  } catch {
-    Write-Warning "Could not check print queue: $_";
-  }
-  
-  # Clean up
-  $image.Dispose();
-  $printDoc.Dispose();
-} catch {
-  Write-Warning "Method 1 failed: $_";
-}
-
-# METHOD 2: MS Paint silent printing
-if (-not $method1Success) {
-  Write-Host "Method 2: MS Paint silent printing...";
-  $method2Success = $false;
-  try {
-    # Use /pt instead of /p for silent printing
-    $method2 = Start-Process -FilePath "mspaint.exe" -ArgumentList "/pt \`"$filePath\`" \`"$printerName\`"" -Wait -PassThru -NoNewWindow;
-    Write-Host "Method 2 completed with code: $($method2.ExitCode)";
+    # Set up print settings
+    $printDoc.DefaultPageSettings.Color = $isColor;
+    $printDoc.DefaultPageSettings.Landscape = $orientation -eq 'landscape';
     
-    # Check if print job was created
-    Start-Sleep -Seconds 3;
-    try {
-      $queue = Get-PrintJob -PrinterName $printerName;
-      if ($queue) {
-        Write-Host "Print job found in queue after Method 2";
-        $method2Success = $true;
-      } else {
-        Write-Host "No print jobs in queue after Method 2";
-      }
-    } catch {
-      Write-Warning "Could not check print queue: $_";
-    }
-  } catch {
-    Write-Warning "Method 2 failed: $_";
-  }
-}
-
-# METHOD 3: CMD direct print command
-if (-not ($method1Success -or $method2Success)) {
-  Write-Host "Method 3: CMD print command...";
-  $method3Success = $false;
-  try {
-    $cmd = Start-Process -FilePath "cmd.exe" -ArgumentList "/c print \`"$filePath\`" \`"$printerName\`"" -Wait -PassThru -NoNewWindow;
-    Write-Host "Method 3 completed with code: $($cmd.ExitCode)";
+    Write-Host "Original image dimensions: $($image.Width) x $($image.Height)";
+    Write-Host "Page settings - Landscape: $($printDoc.DefaultPageSettings.Landscape)";
+    Write-Host "Page bounds: $($printDoc.DefaultPageSettings.Bounds)";
     
-    # Check if print job was created
-    Start-Sleep -Seconds 3;
-    try {
-      $queue = Get-PrintJob -PrinterName $printerName;
-      if ($queue) {
-        Write-Host "Print job found in queue after Method 3";
-        $method3Success = $true;
-      } else {
-        Write-Host "No print jobs in queue after Method 3";
-      }
-    } catch {
-      Write-Warning "Could not check print queue: $_";
-    }
-  } catch {
-    Write-Warning "Method 3 failed: $_";
-  }
-}
-
-# METHOD 4: Shell print via COM object
-if (-not ($method1Success -or $method2Success -or $method3Success)) {
-  Write-Host "Method 4: Shell COM object printing...";
-  $method4Success = $false;
-  try {
-    $shellApp = New-Object -ComObject Shell.Application;
-    $folder = $shellApp.Namespace([System.IO.Path]::GetDirectoryName($filePath));
-    $file = $folder.ParseName([System.IO.Path]::GetFileName($filePath));
-    
-    if ($file) {
-      # Using InvokeVerb for printing
-      $file.InvokeVerb("Print");
-      Write-Host "Shell COM print command sent";
-      
-      # Check if print job was created
-      Start-Sleep -Seconds 5;
-      try {
-        $queue = Get-PrintJob -PrinterName $printerName;
-        if ($queue) {
-          Write-Host "Print job found in queue after Method 4";
-          $method4Success = $true;
+    # Create the print handler
+    $printDoc.add_PrintPage({
+        param($sender, $e)
+        
+        $bounds = $e.PageBounds;
+        Write-Host "Print page bounds: $($bounds.Width) x $($bounds.Height)";
+        
+        # Calculate scaling while maintaining aspect ratio
+        $imageRatio = $image.Width / $image.Height;
+        $pageRatio = $bounds.Width / $bounds.Height;
+        
+        $finalWidth = $bounds.Width;
+        $finalHeight = $bounds.Height;
+        
+        if ($imageRatio > $pageRatio) {
+            # Image is wider than page ratio
+            $finalHeight = $bounds.Width / $imageRatio;
         } else {
-          Write-Host "No print jobs in queue after Method 4";
+            # Image is taller than page ratio
+            $finalWidth = $bounds.Height * $imageRatio;
         }
-      } catch {
-        Write-Warning "Could not check print queue: $_";
-      }
-    } else {
-      Write-Warning "Could not locate file using Shell.Application";
-    }
-  } catch {
-    Write-Warning "Method 4 failed: $_";
-  }
-}
-
-# METHOD 5: Windows Photo Viewer - LAST RESORT (shows dialog)
-if (-not ($method1Success -or $method2Success -or $method3Success -or $method4Success)) {
-  Write-Host "Method 5 (INTERACTIVE): Windows Photo Viewer printing...";
-  try {
-    $method5 = Start-Process -FilePath "rundll32.exe" -ArgumentList "shimgvw.dll,ImageView_PrintTo \`"$filePath\`" \`"$printerName\`"" -Wait -PassThru -NoNewWindow;
-    if ($method5.ExitCode -eq 0) {
-      Write-Host "Method 5 completed - note this method shows an interactive dialog";
-    } else {
-      Write-Warning "Method 5 exited with code: $($method5.ExitCode)";
-    }
-  } catch {
-    Write-Warning "Method 5 failed: $_";
-  }
-}
-
-# Final checks and cleanup are kept the same
-# Always check if print job was added to the queue
-Start-Sleep -Seconds 2;
-try {
-  $finalQueueCheck = Get-PrintJob -PrinterName $printerName;
-  Write-Host "Final print queue check:";
-  if ($finalQueueCheck) {
-    Write-Host "Job count: $($finalQueueCheck.Count)";
-    foreach ($job in $finalQueueCheck) {
-      Write-Host "Job: $($job.JobId) - $($job.DocumentName) - $($job.JobStatus)";
-    }
-  } else {
-    Write-Host "No print jobs found in the queue";
-  }
+        
+        # Center the image
+        $x = ($bounds.Width - $finalWidth) / 2;
+        $y = ($bounds.Height - $finalHeight) / 2;
+        
+        Write-Host "Drawing image at: $x, $y with dimensions: $finalWidth x $finalHeight";
+        
+        # Create destination rectangle
+        $destRect = New-Object System.Drawing.RectangleF($x, $y, $finalWidth, $finalHeight);
+        
+        # Draw the image
+        $e.Graphics.DrawImage($image, $destRect);
+    });
+    
+    # Print the document
+    Write-Host "Sending print command...";
+    $printDoc.Print();
+    
+    # Clean up
+    $image.Dispose();
+    $printDoc.Dispose();
+    
+    Write-Host "Print command sent successfully";
 } catch {
-  Write-Warning "Could not perform final print queue check: $_";
+    Write-Error "Printing failed: $_";
+    throw;
+} finally {
+    if ($image) { $image.Dispose(); }
+    if ($printDoc) { $printDoc.Dispose(); }
 }
-
-# Check printer status again
-try {
-  $printerObj = Get-Printer -Name $printerName -ErrorAction Stop;
-  $statusCode = $printerObj.PrinterStatus;
-  $statusText = $statusMap[$statusCode];
-  Write-Host "Printer final status: $statusText ($statusCode)";
-} catch {
-  Write-Warning "Could not check final printer status: $_";
-}
-
-# Restore default printer
-$wshNetwork.SetDefaultPrinter($oldDefault);
-Write-Host "Default printer restored to: $oldDefault";
-Write-Host "===== PRINT JOB COMPLETED =====";
 `;
 
       // Write script to temporary file
@@ -1226,10 +862,22 @@ const basePrintFileHandler = async (req, res) => {
       quality,
       price,
       contentType,
-      printMethod
+      printMethod,
+      hasColorContent,
+      colorPageCount,
+      printJobId
     } = req.body;
 
     console.log("Received print request:", JSON.stringify(req.body, null, 2));
+
+    // Update status in Firebase if printJobId is provided
+    if (printJobId) {
+      try {
+        await updatePrintProgress(printJobId, 5, 'Preparing to print...');
+      } catch (updateError) {
+        console.warn(`Could not update print job status in Firebase: ${updateError.message}`);
+      }
+    }
 
     // Basic validation
     if (!printerName || !fileUrl) {
@@ -1277,12 +925,72 @@ const basePrintFileHandler = async (req, res) => {
 
     try {
       console.log("Downloading file from URL:", fileUrl);
-      const response = await axios.get(fileUrl, {
-        responseType: 'arraybuffer',
-        timeout: 30000
-      });
-      fs.writeFileSync(filePath, response.data);
-      console.log("File downloaded successfully to:", filePath);
+
+      // Add retry logic for downloading the file
+      let retryCount = 0;
+      const maxRetries = 2;
+      let downloadSuccess = false;
+      let lastError = null;
+
+      while (retryCount <= maxRetries && !downloadSuccess) {
+        try {
+          const response = await axios.get(fileUrl, {
+            responseType: 'arraybuffer',
+            timeout: 30000,
+            headers: {
+              'Cache-Control': 'no-cache',
+              'Pragma': 'no-cache'
+            }
+          });
+
+          fs.writeFileSync(filePath, response.data);
+          console.log("File downloaded successfully to:", filePath);
+          downloadSuccess = true;
+        } catch (downloadAttemptError) {
+          lastError = downloadAttemptError;
+          console.warn(`Download attempt ${retryCount + 1} failed:`, downloadAttemptError.message);
+
+          // If this is a Firebase Storage URL and we got a 400/403 error (token expired)
+          if (fileUrl.includes('firebasestorage.googleapis.com') &&
+            (downloadAttemptError.response?.status === 400 ||
+              downloadAttemptError.response?.status === 403 ||
+              downloadAttemptError.response?.status === 401)) {
+            console.log("Firebase token likely expired. Requesting client to refresh URL.");
+
+            // If we have a print job ID, update status
+            if (printJobId) {
+              try {
+                await updatePrintProgress(printJobId, 5, 'Firebase token expired. Please try again.');
+                await update(dbRef(db, `files/${printJobId}`), {
+                  status: "Error",
+                  printStatus: "URL token expired. Please refresh and try again."
+                });
+              } catch (updateError) {
+                console.warn(`Could not update print job status in Firebase: ${updateError.message}`);
+              }
+            }
+
+            // Return token expired error immediately - no need to retry further
+            return res.status(401).json({
+              status: 'error',
+              error: 'Firebase Storage token expired. Please refresh the page and try again.',
+              details: {
+                tokenExpired: true,
+                originalError: downloadAttemptError.message
+              }
+            });
+          }
+
+          // Add a small delay before retrying
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          retryCount++;
+        }
+      }
+
+      // If all attempts failed, throw the last error
+      if (!downloadSuccess) {
+        throw lastError || new Error("Failed to download file after multiple attempts");
+      }
 
       // Verify file exists and is readable
       if (!fs.existsSync(filePath)) {
@@ -1301,6 +1009,20 @@ const basePrintFileHandler = async (req, res) => {
       }
     } catch (downloadError) {
       console.error("Error downloading file:", downloadError.message);
+
+      // If we have a print job ID, update status
+      if (printJobId) {
+        try {
+          await updatePrintProgress(printJobId, 5, `Download failed: ${downloadError.message}`);
+          await update(dbRef(db, `files/${printJobId}`), {
+            status: "Error",
+            printStatus: "Failed to download file. Please try again."
+          });
+        } catch (updateError) {
+          console.warn(`Could not update print job status in Firebase: ${updateError.message}`);
+        }
+      }
+
       return res.status(400).json({
         status: 'error',
         error: `Failed to download file from URL: ${downloadError.message}`
@@ -1330,21 +1052,6 @@ const basePrintFileHandler = async (req, res) => {
 
         console.log("PDF processed successfully and saved to:", processedFilePath);
 
-        // Verify processed file exists
-        if (!fs.existsSync(processedFilePath)) {
-          const trimmedPath = processedFilePath.trim();
-          if (fs.existsSync(trimmedPath)) {
-            console.log(`Processed file found at trimmed path: ${trimmedPath}`);
-            processedFilePath = trimmedPath;
-          } else {
-            console.error(`Critical error: Processed file not found at: ${processedFilePath}`);
-            return res.status(500).json({
-              status: 'error',
-              error: `PDF was processed but could not be found on disk. This might be a path encoding issue.`
-            });
-          }
-        }
-
         // Update the file path to use the processed file
         filePath = processedFilePath;
       } catch (pdfError) {
@@ -1365,20 +1072,36 @@ const basePrintFileHandler = async (req, res) => {
       const printOptions = {
         duplex,
         paperSource,
-        quality
+        quality,
+        hasColorContent,
+        colorPageCount
       };
+
+      // Update status in Firebase if printJobId is provided
+      if (printJobId) {
+        try {
+          await updatePrintProgress(printJobId, 30, 'Sending to printer...');
+        } catch (updateError) {
+          console.warn(`Could not update print job status in Firebase: ${updateError.message}`);
+        }
+      }
 
       // Print the file for the specified number of copies
       const printPromises = [];
       for (let i = 0; i < numCopies; i++) {
         console.log(`Printing copy ${i + 1} of ${numCopies} `);
 
+        // Log color information for debugging
+        if (hasColorContent) {
+          console.log(`Document contains color content (${colorPageCount || 'unknown'} colored pages detected)`);
+        }
+
         // Choose appropriate printing method based on file type or explicit request
         const useDirectImagePrinting = isImageFile || printMethod === 'direct';
 
         if (useDirectImagePrinting) {
           console.log(`Using specialized image printing for ${filePath}`);
-          printPromises.push(printImageFile(filePath, printerName, isColor));
+          printPromises.push(printImageFile(filePath, printerName, isColor, orientation));
         } else {
           // Use the OS native printing commands for other file types
           printPromises.push(printFileWithOSCommands(filePath, printerName, isColor, printOptions));
@@ -1452,6 +1175,15 @@ const basePrintFileHandler = async (req, res) => {
         diagnosticInfo.error = diagError.message;
       }
 
+      // Update status in Firebase if printJobId is provided
+      if (printJobId) {
+        try {
+          await updatePrintProgress(printJobId, 100, 'Print job completed');
+        } catch (updateError) {
+          console.warn(`Could not update final print job status in Firebase: ${updateError.message}`);
+        }
+      }
+
       return res.json({
         status: 'success',
         message: 'Print job sent successfully.',
@@ -1461,6 +1193,11 @@ const basePrintFileHandler = async (req, res) => {
           file: fileName,
           copies: numCopies,
           usedDirectPrinting: isImageFile || printMethod === 'direct',
+          colorInfo: {
+            isColor,
+            hasColorContent: !!hasColorContent,
+            colorPageCount: colorPageCount || 0
+          },
           diagnostic: diagnosticInfo
         }
       });
@@ -1740,7 +1477,104 @@ const enhancedPrintFileHandler = async (req, res) => {
 };
 
 // Export the enhanced version as the main printFileHandler
-export const printFileHandler = enhancedPrintFileHandler;
+export const printFileHandler = async (req, res) => {
+  const { fileUrl, fileName, printerName, copies = 1, isColor = false, orientation = 'portrait', selectedSize = 'Short Bond', printJobId } = req.body;
+
+  try {
+    // Update initial progress
+    await updatePrintProgress(printJobId, 5, "Downloading file...");
+
+    // Download the file
+    const response = await axios({
+      method: 'get',
+      url: fileUrl,
+      responseType: 'stream'
+    });
+
+    await updatePrintProgress(printJobId, 15, "Processing document...");
+
+    // Create temp directory if it doesn't exist
+    const tempDir = path.join(__dirname, 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir);
+    }
+
+    // Generate unique filename
+    const uniqueFilename = `${uuidv4()}_${fileName}`;
+    const filePath = path.join(tempDir, uniqueFilename);
+
+    // Save file to disk
+    const writer = fs.createWriteStream(filePath);
+    response.data.pipe(writer);
+
+    await new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    });
+
+    await updatePrintProgress(printJobId, 30, "Configuring printer settings...");
+
+    // Determine file type and use appropriate print method
+    const fileExt = path.extname(fileName).toLowerCase();
+    let printResult;
+
+    await updatePrintProgress(printJobId, 45, "Preparing to print...");
+
+    if (fileExt === '.pdf') {
+      await updatePrintProgress(printJobId, 60, "Sending PDF to printer...");
+      printResult = await printFileWithSumatra(filePath, printerName, isColor);
+    } else if (['.doc', '.docx'].includes(fileExt)) {
+      await updatePrintProgress(printJobId, 60, "Processing Word document...");
+      printResult = await printWordDocument(filePath, printerName, isColor, selectedSize, orientation);
+    } else if (['.jpg', '.jpeg', '.png'].includes(fileExt)) {
+      await updatePrintProgress(printJobId, 60, "Processing image...");
+      printResult = await printImageFile(filePath, printerName, isColor, orientation);
+    } else {
+      throw new Error('Unsupported file type');
+    }
+
+    await updatePrintProgress(printJobId, 75, "Printing in progress...");
+
+    // Simulate print completion after a delay (since we can't track actual printer progress)
+    setTimeout(async () => {
+      await updatePrintProgress(printJobId, 90, "Finishing print job...");
+
+      // Clean up temp file
+      try {
+        fs.unlinkSync(filePath);
+      } catch (cleanupError) {
+        console.error('Error cleaning up temp file:', cleanupError);
+      }
+
+      // Mark as complete
+      setTimeout(async () => {
+        await updatePrintProgress(printJobId, 100, "Print job completed");
+      }, 1000);
+    }, 2000);
+
+    res.json({
+      status: 'success',
+      message: 'Print job started successfully'
+    });
+
+  } catch (error) {
+    console.error('Print error:', error);
+
+    // Update Firebase with error status
+    if (printJobId) {
+      await update(dbRef(db, `files/${printJobId}`), {
+        status: "Error",
+        progress: 0,
+        printStatus: error.message || "Failed to print document"
+      });
+    }
+
+    res.status(500).json({
+      status: 'error',
+      message: error.message || 'Failed to print document'
+    });
+  }
+};
 
 /**
  * Get detailed information about a specific printer

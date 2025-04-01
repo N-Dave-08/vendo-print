@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { FaArrowLeft } from "react-icons/fa";
 import { Printer, ArrowLeft, X } from "lucide-react";
 import MiniNav from "../components/MiniNav";
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 
 import CustomPage from "../components/common/customized_page";
 import DocumentPreview from "../components/common/document_preview";
@@ -15,30 +17,12 @@ import { ref as dbRef, push, get, update, set } from "firebase/database";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import { onValue } from "firebase/database";
 import axios from "axios";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import mammoth from "mammoth";
 
 import { getPageIndicesToPrint } from "../utils/pageRanges";
 import Header from "../components/headers/Header";
 import ClientContainer from "../components/containers/ClientContainer";
-
-// Let's update the GroupDocs viewer URL function to ensure we get a proper view
-const getGroupDocsViewerUrl = (fileUrl) => {
-  // Encode the file URL to be used as a parameter
-  const encodedFileUrl = encodeURIComponent(fileUrl);
-
-  // Return a direct URL to the GroupDocs viewer
-  return `https://products.groupdocs.app/viewer/view?file=${encodedFileUrl}`;
-};
-
-// Let's add a direct function to open the document in GroupDocs with a more reliable approach
-const openInGroupDocs = (fileUrl) => {
-  const encodedFileUrl = encodeURIComponent(fileUrl);
-  const groupDocsUrl = `https://products.groupdocs.app/viewer/view?file=${encodedFileUrl}`;
-
-  // Open GroupDocs in a new tab
-  window.open(groupDocsUrl, '_blank');
-};
 
 const Usb = () => {
   const navigate = useNavigate();
@@ -71,6 +55,603 @@ const Usb = () => {
   const [selectedPrinter, setSelectedPrinter] = useState("");
   const [printerCapabilities, setPrinterCapabilities] = useState(null);
 
+  // Improved DOCX to PDF conversion function
+  const improvedConvertDocxToPdf = async (docxArrayBuffer, fileName) => {
+    try {
+      console.log("Converting DOCX to PDF with improved formatting...");
+
+      // Step 1: Parse DOCX using mammoth for structure extraction
+      const result = await mammoth.convertToHtml({
+        arrayBuffer: docxArrayBuffer,
+        styleMap: [
+          "p[style-name='Heading 1'] => h1:fresh",
+          "p[style-name='Heading 2'] => h2:fresh",
+          "p[style-name='Heading 3'] => h3:fresh",
+          "p[style-name='Title'] => h1.title:fresh",
+          "table => table.table.table-bordered",
+          "p[style-name='TOC Heading'] => h6:fresh",
+          "p[style-name='TOC 1'] => p.toc1:fresh",
+          "p[style-name='TOC 2'] => p.toc2:fresh",
+          "p[style-name='TOC 3'] => p.toc3:fresh",
+          "r[style-name='Strong'] => strong",
+          "r[style-name='Emphasis'] => em"
+        ]
+      });
+
+      // Step 2: Create a new PDF document
+      const pdfDoc = await PDFDocument.create();
+
+      // Standard letter size (612x792 points)
+      const pageWidth = 612;
+      const pageHeight = 792;
+      const margin = 72; // 1 inch margins
+
+      // Font settings - embed several fonts for better text styling support
+      const regularFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+      const boldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
+      const italicFont = await pdfDoc.embedFont(StandardFonts.TimesRomanItalic);
+      const boldItalicFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBoldItalic);
+
+      // Font sizes for different elements
+      const regularFontSize = 12;
+      const h1FontSize = 24;
+      const h2FontSize = 20;
+      const h3FontSize = 16;
+      const lineHeight = regularFontSize * 1.5;
+
+      // Parse HTML content
+      const parser = new DOMParser();
+      const htmlDoc = parser.parseFromString(result.value, 'text/html');
+
+      // Track the current position and page
+      let currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
+      let y = pageHeight - margin;
+      let pageCount = 1;
+
+      // Function to add a new page when needed
+      const addNewPageIfNeeded = (neededSpace) => {
+        if (y - neededSpace < margin) {
+          currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
+          pageCount++;
+          y = pageHeight - margin;
+          return true;
+        }
+        return false;
+      };
+
+      // Process HTML elements
+      const processNodes = (nodes) => {
+        for (let i = 0; i < nodes.length; i++) {
+          const node = nodes[i];
+
+          // Skip empty text nodes and comments
+          if (node.nodeType === 3 && !node.textContent.trim()) continue;
+          if (node.nodeType === 8) continue; // Comment node
+
+          if (node.nodeType === 3) {
+            // This is a text node
+            const text = node.textContent.trim();
+            if (text) {
+              addNewPageIfNeeded(lineHeight);
+              currentPage.drawText(text, {
+                x: margin,
+                y: y,
+                size: regularFontSize,
+                font: regularFont,
+                color: rgb(0, 0, 0),
+              });
+              y -= lineHeight;
+            }
+          } else if (node.nodeType === 1) {
+            // This is an element node
+            const tagName = node.tagName.toLowerCase();
+
+            if (tagName === 'h1') {
+              const text = node.textContent.trim();
+              addNewPageIfNeeded(h1FontSize * 2);
+              currentPage.drawText(text, {
+                x: margin,
+                y: y,
+                size: h1FontSize,
+                font: boldFont,
+                color: rgb(0, 0, 0),
+              });
+              y -= h1FontSize * 1.5;
+            }
+            else if (tagName === 'h2') {
+              const text = node.textContent.trim();
+              addNewPageIfNeeded(h2FontSize * 2);
+              currentPage.drawText(text, {
+                x: margin,
+                y: y,
+                size: h2FontSize,
+                font: boldFont,
+                color: rgb(0, 0, 0),
+              });
+              y -= h2FontSize * 1.5;
+            }
+            else if (tagName === 'h3') {
+              const text = node.textContent.trim();
+              addNewPageIfNeeded(h3FontSize * 2);
+              currentPage.drawText(text, {
+                x: margin,
+                y: y,
+                size: h3FontSize,
+                font: boldFont,
+                color: rgb(0, 0, 0),
+              });
+              y -= h3FontSize * 1.5;
+            }
+            else if (tagName === 'p') {
+              // Get the raw text content of this paragraph
+              const text = node.textContent.trim();
+              if (!text) continue;
+
+              // Check for space needed
+              addNewPageIfNeeded(lineHeight);
+
+              // Process paragraph with word wrapping
+              const words = text.split(' ');
+              let line = '';
+
+              for (let i = 0; i < words.length; i++) {
+                const word = words[i];
+                const testLine = line + (line ? ' ' : '') + word;
+                const width = regularFont.widthOfTextAtSize(testLine, regularFontSize);
+
+                if (width > pageWidth - margin * 2 && i > 0) {
+                  // Line is full, draw it
+                  currentPage.drawText(line, {
+                    x: margin,
+                    y: y,
+                    size: regularFontSize,
+                    font: regularFont,
+                    color: rgb(0, 0, 0),
+                  });
+
+                  // Move to next line
+                  y -= lineHeight;
+                  line = word;
+
+                  // Check if we need a new page
+                  if (y < margin) {
+                    currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
+                    pageCount++;
+                    y = pageHeight - margin;
+                  }
+                } else {
+                  line = testLine;
+                }
+              }
+
+              // Draw any remaining text
+              if (line) {
+                currentPage.drawText(line, {
+                  x: margin,
+                  y: y,
+                  size: regularFontSize,
+                  font: regularFont,
+                  color: rgb(0, 0, 0),
+                });
+                y -= lineHeight;
+              }
+
+              // Add paragraph spacing
+              y -= lineHeight * 0.5;
+            }
+            else if (tagName === 'strong' || tagName === 'b') {
+              // Handle bold text
+              const text = node.textContent.trim();
+              if (text) {
+                addNewPageIfNeeded(lineHeight);
+                currentPage.drawText(text, {
+                  x: margin,
+                  y: y,
+                  size: regularFontSize,
+                  font: boldFont,
+                  color: rgb(0, 0, 0),
+                });
+                y -= lineHeight;
+              }
+            }
+            else if (tagName === 'em' || tagName === 'i') {
+              // Handle italic text
+              const text = node.textContent.trim();
+              if (text) {
+                addNewPageIfNeeded(lineHeight);
+                currentPage.drawText(text, {
+                  x: margin,
+                  y: y,
+                  size: regularFontSize,
+                  font: italicFont,
+                  color: rgb(0, 0, 0),
+                });
+                y -= lineHeight;
+              }
+            }
+            else if (tagName === 'ul' || tagName === 'ol') {
+              // Handle lists
+              const items = node.querySelectorAll('li');
+              for (let j = 0; j < items.length; j++) {
+                const prefix = tagName === 'ul' ? '• ' : `${j + 1}. `;
+                const itemText = items[j].textContent.trim();
+
+                // Process list item with word wrapping
+                addNewPageIfNeeded(lineHeight);
+
+                // Handle list item
+                const listItemTextWithPrefix = `${prefix}${itemText}`;
+                const words = listItemTextWithPrefix.split(' ');
+                let line = '';
+                let firstLine = true;
+
+                for (let k = 0; k < words.length; k++) {
+                  const word = words[k];
+                  const testLine = line + (line ? ' ' : '') + word;
+                  const width = regularFont.widthOfTextAtSize(testLine, regularFontSize);
+
+                  if (width > pageWidth - margin * 2 - (firstLine ? 0 : 15) && k > 0) {
+                    // Line is full, draw it
+                    currentPage.drawText(line, {
+                      x: firstLine ? margin : margin + 15, // Indent wrapped lines
+                      y: y,
+                      size: regularFontSize,
+                      font: regularFont,
+                      color: rgb(0, 0, 0),
+                    });
+
+                    // Move to next line
+                    y -= lineHeight;
+                    line = word;
+                    firstLine = false;
+
+                    // Check if we need a new page
+                    if (y < margin) {
+                      currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
+                      pageCount++;
+                      y = pageHeight - margin;
+                    }
+                  } else {
+                    line = testLine;
+                  }
+                }
+
+                // Draw any remaining text
+                if (line) {
+                  currentPage.drawText(line, {
+                    x: firstLine ? margin : margin + 15,
+                    y: y,
+                    size: regularFontSize,
+                    font: regularFont,
+                    color: rgb(0, 0, 0),
+                  });
+                  y -= lineHeight;
+                }
+
+                // Add spacing between list items
+                y -= lineHeight * 0.3;
+              }
+
+              // Add spacing after the list
+              y -= lineHeight * 0.5;
+            }
+            else if (tagName === 'table') {
+              // Basic table handling
+              const rows = node.querySelectorAll('tr');
+
+              // Simplified table implementation
+              for (let r = 0; r < rows.length; r++) {
+                const cells = rows[r].querySelectorAll('td, th');
+                let cellX = margin;
+                const isHeader = r === 0;
+                const rowText = [];
+
+                // Calculate the cell width based on the number of cells
+                const availableWidth = pageWidth - margin * 2;
+                const cellWidth = availableWidth / Math.max(1, cells.length);
+
+                // First, draw the row background if it's a header
+                if (isHeader) {
+                  currentPage.drawRectangle({
+                    x: margin,
+                    y: y - lineHeight + 5,
+                    width: availableWidth,
+                    height: lineHeight,
+                    color: rgb(0.9, 0.9, 0.9),
+                    borderColor: rgb(0.5, 0.5, 0.5),
+                    borderWidth: 0.5,
+                  });
+                }
+
+                // Now draw cell content
+                for (let c = 0; c < cells.length; c++) {
+                  const cellText = cells[c].textContent.trim();
+                  const cellFont = isHeader ? boldFont : regularFont;
+
+                  // Ensure we have enough space for the table row
+                  if (addNewPageIfNeeded(lineHeight * 1.5)) {
+                    // If we added a new page, reset the cellX position
+                    cellX = margin;
+                  }
+
+                  // Simplified cell content rendering
+                  currentPage.drawText(cellText, {
+                    x: cellX + 5, // Add padding inside cells
+                    y: y - regularFontSize,
+                    size: regularFontSize,
+                    font: cellFont,
+                    color: rgb(0, 0, 0),
+                    maxWidth: cellWidth - 10,
+                  });
+
+                  // Draw cell border
+                  currentPage.drawRectangle({
+                    x: cellX,
+                    y: y - lineHeight + 5,
+                    width: cellWidth,
+                    height: lineHeight,
+                    borderColor: rgb(0.5, 0.5, 0.5),
+                    borderWidth: 0.5,
+                    color: rgb(1, 1, 1, 0), // Transparent fill
+                  });
+
+                  cellX += cellWidth;
+                }
+
+                // Move to the next row
+                y -= lineHeight;
+              }
+
+              // Add spacing after the table
+              y -= lineHeight;
+            }
+            else if (tagName === 'br') {
+              // Handle line breaks
+              y -= lineHeight;
+
+              // Check if we need a new page
+              if (y < margin) {
+                currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
+                pageCount++;
+                y = pageHeight - margin;
+              }
+            }
+            else if (tagName === 'img') {
+              // We cannot easily embed images with pdf-lib alone
+              // Just add a placeholder for now
+              y -= lineHeight;
+              currentPage.drawText("[Image]", {
+                x: margin,
+                y: y,
+                size: regularFontSize,
+                font: italicFont,
+                color: rgb(0.5, 0.5, 0.5),
+              });
+              y -= lineHeight;
+            }
+            else if (node.hasChildNodes()) {
+              // Process child nodes for other elements
+              processNodes(node.childNodes);
+            }
+          }
+        }
+      };
+
+      // Process the body of the document
+      processNodes(htmlDoc.body.childNodes);
+
+      // Save the PDF
+      const pdfBytes = await pdfDoc.save();
+
+      // Return the PDF bytes and page count
+      return {
+        pdfBytes,
+        pageCount: pageCount || 1
+      };
+    } catch (error) {
+      console.error("Error in improved DOCX to PDF conversion:", error);
+      throw error;
+    }
+  };
+
+  // Convert DOCX to PDF function
+  const convertDocxToPdf = async (file) => {
+    try {
+      setIsLoading(true);
+      console.log("Converting DOCX to PDF before upload...");
+
+      // Get the DOCX content as ArrayBuffer
+      const docxArrayBuffer = await file.arrayBuffer();
+
+      try {
+        // Use our improved conversion function
+        const { pdfBytes, pageCount } = await improvedConvertDocxToPdf(docxArrayBuffer, file.name);
+
+        // Create a File object from the PDF bytes
+        const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
+        const pdfFileName = file.name.replace(/\.(docx|doc)$/i, '.pdf');
+        const pdfFile = new File([pdfBlob], pdfFileName, { type: 'application/pdf' });
+
+        setIsLoading(false);
+        console.log(`Improved PDF conversion successful with ${pageCount} pages`);
+
+        return {
+          convertedFile: pdfFile,
+          pageCount: pageCount || 1
+        };
+      } catch (enhancedError) {
+        console.error("Improved conversion failed, falling back to simple conversion:", enhancedError);
+
+        // Fallback to simpler conversion if advanced conversion fails
+        const result = await mammoth.extractRawText({ arrayBuffer: docxArrayBuffer });
+        const text = result.value;
+
+        // Create a simple PDF with the text
+        const pdfDoc = await PDFDocument.create();
+        let page = pdfDoc.addPage();
+        const { width, height } = page.getSize();
+        const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+        const fontSize = 12;
+        const margin = 50;
+        const lineHeight = fontSize * 1.2;
+
+        // Split text into lines and draw on the page
+        const textLines = text.split('\n');
+        let y = height - margin;
+        let pageCount = 1;
+
+        for (const line of textLines) {
+          if (y < margin + fontSize) {
+            // Add a new page if needed
+            page = pdfDoc.addPage();
+            pageCount++;
+            y = height - margin;
+          }
+
+          page.drawText(line, {
+            x: margin,
+            y: y,
+            size: fontSize,
+            font: font,
+            color: rgb(0, 0, 0),
+          });
+
+          y -= lineHeight;
+        }
+
+        const pdfBytes = await pdfDoc.save();
+        const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
+        const pdfFileName = file.name.replace(/\.(docx|doc)$/i, '.pdf');
+        const pdfFile = new File([pdfBlob], pdfFileName, { type: 'application/pdf' });
+
+        setIsLoading(false);
+        console.log(`Simple PDF conversion completed with ${pageCount} pages`);
+
+        return {
+          convertedFile: pdfFile,
+          pageCount: pageCount || 1
+        };
+      }
+    } catch (error) {
+      console.error("Error converting DOCX to PDF:", error);
+      setIsLoading(false);
+      return null;
+    }
+  };
+
+  // New function for server-side conversion using LibreOffice
+  const convertDocxWithLibreOffice = async (file) => {
+    try {
+      console.log("Converting DOCX to PDF using LibreOffice...");
+      setPrintStatus("Converting document using LibreOffice...");
+      setPrintProgress(20);
+
+      // Create form data for the file
+      const formData = new FormData();
+      formData.append('file', file);
+
+      // Get the backend URL with proper port and error handling
+      // Try multiple possible backend URLs
+      const possibleBackendUrls = [
+        'http://localhost:5000/api/convert-docx',
+        'http://127.0.0.1:5000/api/convert-docx',
+        `http://${window.location.hostname}:5000/api/convert-docx`
+      ];
+
+      let response = null;
+      let lastError = null;
+
+      // Try each URL until one works
+      for (const backendUrl of possibleBackendUrls) {
+        try {
+          console.log(`Attempting to connect to backend at: ${backendUrl}`);
+
+          // Call the backend conversion API with a timeout
+          response = await axios.post(backendUrl, formData, {
+            headers: {
+              'Content-Type': 'multipart/form-data'
+            },
+            responseType: 'blob', // Important: we want the response as a blob
+            timeout: 60000 // 60 second timeout for conversion
+          });
+
+          // If we got here, the request succeeded
+          console.log(`Successfully connected to backend at: ${backendUrl}`);
+          break;
+        } catch (err) {
+          console.log(`Failed to connect to ${backendUrl}: ${err.message}`);
+          lastError = err;
+          setPrintStatus(`Trying alternative connection method... (${backendUrl})`);
+        }
+      }
+
+      // If all attempts failed, throw the last error
+      if (!response) {
+        throw lastError || new Error('Failed to connect to any backend URL');
+      }
+
+      // Check if the response is an error in JSON format
+      const contentType = response.headers['content-type'];
+      if (contentType && contentType.includes('application/json')) {
+        // This is likely an error response in JSON format
+        const errorText = await new Response(response.data).text();
+        const errorData = JSON.parse(errorText);
+        throw new Error(errorData.message || 'Server error during conversion');
+      }
+
+      // Create a new file from the response
+      const pdfBlob = new Blob([response.data], { type: 'application/pdf' });
+      const pdfFileName = file.name.replace(/\.(docx|doc)$/i, '.pdf');
+      const pdfFile = new File([pdfBlob], pdfFileName, { type: 'application/pdf' });
+
+      // Get PDF page count
+      const pdfArrayBuffer = await pdfBlob.arrayBuffer();
+      const pdfDoc = await PDFDocument.load(pdfArrayBuffer);
+      const pageCount = pdfDoc.getPageCount();
+
+      // Check if this is the fallback conversion by looking for warning text in the PDF
+      let isFallbackConversion = false;
+      if (pageCount === 1) {
+        try {
+          const pdfText = await pdfDoc.getPage(0).getText();
+          if (pdfText.includes('Fallback Method') || pdfText.includes('LibreOffice was not available')) {
+            isFallbackConversion = true;
+            console.warn('Detected fallback conversion - formatting will be limited');
+
+            // Show a warning to the user
+            setTimeout(() => {
+              alert("Your document was converted using a simplified method because LibreOffice is not installed on the server. The formatting may be limited. For better conversion quality, please ask the administrator to install LibreOffice.");
+            }, 1000);
+          }
+        } catch (e) {
+          // Ignore errors in fallback detection
+        }
+      }
+
+      console.log(`Server-side conversion successful with ${pageCount} pages${isFallbackConversion ? ' (fallback method)' : ''}`);
+      setPrintStatus("Conversion complete!");
+      setPrintProgress(40);
+
+      return {
+        convertedFile: pdfFile,
+        pageCount: pageCount || 1,
+        isFallbackConversion
+      };
+    } catch (error) {
+      console.error("Error in server-side conversion:", error);
+      setPrintStatus("Conversion failed. Please try again.");
+      setPrintProgress(0);
+
+      // Display a more helpful error message
+      const errorMessage = error.response ?
+        `Server error: ${error.response.status} - ${error.response.statusText}` :
+        `Connection error: ${error.message}`;
+
+      alert(`Server-side conversion failed: ${errorMessage}\n\nPlease check that:\n1. The backend server is running on port 5000\n2. LibreOffice is installed and in your PATH`);
+      throw error;
+    }
+  };
+
   useEffect(() => {
     setShowModal(true);
   }, []);
@@ -96,203 +677,225 @@ const Usb = () => {
     return () => unsubscribe();
   }, []);
 
-  const handleFileSelect = (event) => {
-    const file = event.target.files[0];
-    if (!file) {
-      alert("No file selected!");
-      return;
-    }
-    setFileToUpload(file);
+  const handleFileSelect = async (e) => {
+    const selectedFile = e.target.files[0];
 
-    // If PDF, get total pages
-    if (file.type === "application/pdf") {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const pdfData = new Uint8Array(e.target.result);
-        const pdfDoc = await PDFDocument.load(pdfData);
-        const totalPageCount = pdfDoc.getPageCount();
-        setTotalPages(totalPageCount);
-      };
-      reader.readAsArrayBuffer(file);
-    }
-    else if (
-      file.type ===
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    ) {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const arrayBuffer = e.target.result;
-        try {
-          const result = await mammoth.extractRawText({ arrayBuffer });
-          const textLength = result.value.length;
-          const estimatedPages = Math.ceil(textLength / 1000);
-          setTotalPages(estimatedPages);
-        } catch (error) {
-          console.error("Error reading docx file:", error);
-        }
-      };
-      reader.readAsArrayBuffer(file);
-    } else {
-      setTotalPages(1);
-    }
-
-    uploadFileToFirebase(file);
-  };
-
-  const uploadFileToFirebase = async (file) => {
-    if (!file) {
-      return;
-    }
-
-    // Create a unique filename to avoid collisions
-    const timestamp = new Date().getTime();
-    const uniqueFileName = `${timestamp}_${file.name}`;
-    const storageRef = ref(storage, `uploads/${uniqueFileName}`);
-
-    // Set metadata to ensure files are publicly readable
-    const metadata = {
-      contentType: file.type,
-      customMetadata: {
-        'public': 'true'
-      }
-    };
-
-    const uploadTask = uploadBytesResumable(storageRef, file, metadata);
-
-    uploadTask.on(
-      "state_changed",
-      (snapshot) => {
-        // Handle progress if needed
-        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-        console.log('Upload progress:', progress);
-      },
-      (error) => {
-        console.error("Upload failed:", error);
-        setFilePreviewUrl("");
-        setFileToUpload(null);
-      },
-      async () => {
-        try {
-          const url = await getDownloadURL(uploadTask.snapshot.ref);
-          setFilePreviewUrl(url);
-
-          // Push file details to Firebase Realtime Database
-          const fileRef = push(dbRef(realtimeDb, "uploadedFiles"));
-          await set(fileRef, {
-            fileName: file.name,
-            fileUrl: url,
-            totalPages,
-            uploadedAt: new Date().toISOString(),
-            uploadSource: "usb"
-          });
-
-        } catch (error) {
-          console.error("Error getting download URL:", error);
-          setFilePreviewUrl("");
-          setFileToUpload(null);
-        }
-      }
-    );
-  };
-
-  // Add a function to render DOCX as HTML using mammoth.js
-  const renderDocxAsHtml = async () => {
-    if (!fileToUpload ||
-      !(fileToUpload.name.toLowerCase().endsWith('.docx') ||
-        fileToUpload.name.toLowerCase().endsWith('.doc'))) {
-      alert("Please upload a valid Word document.");
-      return;
-    }
-
-    setIsLoading(true);
+    if (!selectedFile) return;
 
     try {
-      // Read the file as an ArrayBuffer
-      const arrayBuffer = await fileToUpload.arrayBuffer();
+      // Show loading indicator
+      setIsLoading(true);
+      setPrintProgress(10);
+      setPrintStatus("Processing file...");
 
-      // Use mammoth to convert to HTML
-      const result = await mammoth.convertToHtml({ arrayBuffer });
-      const htmlContent = result.value;
+      // Check if the file is a DOCX file
+      const isDocx = selectedFile.name.toLowerCase().endsWith(".docx") ||
+        selectedFile.name.toLowerCase().endsWith(".doc");
 
-      // Open a new window with the HTML content
-      const printWindow = window.open('', '_blank', 'width=800,height=600');
+      // For DOCX files, convert to PDF using LibreOffice
+      let fileToUpload = selectedFile;
+      let pageCount = 1;
 
-      if (!printWindow) {
-        alert("Please allow pop-ups to open the preview.");
-        setIsLoading(false);
-        return;
+      if (isDocx) {
+        console.log("DOCX file detected, converting to PDF using LibreOffice...");
+        setPrintStatus("Converting DOCX to PDF...");
+
+        try {
+          const conversionResult = await convertDocxWithLibreOffice(selectedFile);
+
+          if (!conversionResult) {
+            console.error("DOCX conversion failed");
+            setIsLoading(false);
+            setPrintStatus("Conversion failed. Please try again.");
+            return;
+          }
+
+          fileToUpload = conversionResult.convertedFile;
+          pageCount = conversionResult.pageCount;
+
+          console.log("Conversion complete, uploading converted PDF", fileToUpload);
+          setPrintStatus("Analyzing document colors...");
+          setPrintProgress(50);
+        } catch (error) {
+          console.error("Error converting with LibreOffice:", error);
+          alert("Server-side conversion failed. Please check if LibreOffice is installed on the server.");
+          setIsLoading(false);
+          setPrintStatus("");
+          setPrintProgress(0);
+          return;
+        }
+      } else if (selectedFile.type === "application/pdf") {
+        // For PDF files, get the page count and analyze colors
+        try {
+          const fileSizeInKB = selectedFile.size / 1024;
+          const pdfData = await selectedFile.arrayBuffer();
+          const pdfDoc = await PDFDocument.load(pdfData);
+          pageCount = pdfDoc.getPageCount();
+          console.log(`PDF has ${pageCount} pages`);
+          setPrintStatus("Analyzing document colors...");
+        } catch (error) {
+          console.error("Error getting PDF page count:", error);
+          pageCount = Math.max(1, Math.ceil(fileSizeInKB / 100)); // rough estimate
+        }
       }
 
-      // Write the HTML content to the window
-      printWindow.document.write(`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <title>VendoPrint - ${fileToUpload?.name || 'Document'}</title>
-            <style>
-              body {
-                margin: 0;
-                padding: 20px;
-                font-family: Arial, sans-serif;
-              }
-              .container {
-                max-width: 800px;
-                margin: 0 auto;
-              }
-              .header {
-                text-align: center;
-                padding: 20px;
-                background-color: #f8f9fa;
-                border-bottom: 1px solid #e9ecef;
-                margin-bottom: 20px;
-              }
-              .content {
-                background-color: white;
-                padding: 20px;
-                border: 1px solid #ddd;
-                border-radius: 4px;
-              }
-              button {
-                padding: 10px 20px;
-                background-color: #31304D;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                cursor: pointer;
-                margin-top: 10px;
-              }
-              @media print {
-                .no-print {
-                  display: none;
-                }
-                body {
-                  padding: 0;
-                }
-              }
-            </style>
-          </head>
-          <body>
-            <div class="container">
-              <div class="header no-print">
-                <h2>${fileToUpload?.name || 'Document'}</h2>
-                <p>This is a preview of your document. Some formatting might differ from the original file.</p>
-                <button onclick="window.print()">Print Document</button>
-              </div>
-              <div class="content">
-                ${htmlContent}
-              </div>
-            </div>
-          </body>
-        </html>
-      `);
+      // Create a unique filename to avoid collisions
+      const timestamp = new Date().getTime();
+      const uniqueFileName = `${timestamp}_${fileToUpload.name}`;
+      const storageRef = ref(storage, `uploads/${uniqueFileName}`);
 
-      printWindow.document.close();
+      // Set metadata
+      const metadata = {
+        contentType: fileToUpload.type,
+        customMetadata: {
+          public: "true", // Make it publicly readable
+          pageCount: pageCount.toString(),
+          fileName: selectedFile.name,
+          original: selectedFile.name,
+          isConverted: isDocx ? "true" : "false"
+        }
+      };
 
+      // Upload the file
+      setPrintStatus("Uploading file to storage...");
+      setPrintProgress(60);
+
+      // Create a new File object from the converted file if it's a Blob
+      const fileToUploadFinal = fileToUpload instanceof Blob ?
+        new File([fileToUpload], uniqueFileName, { type: fileToUpload.type }) :
+        fileToUpload;
+
+      // Set the file for preview
+      setFileToUpload(fileToUploadFinal);
+
+      const uploadTask = uploadBytesResumable(storageRef, fileToUploadFinal, metadata);
+
+      // Listen for upload task completion
+      uploadTask.on(
+        "state_changed",
+        (snapshot) => {
+          // Update progress
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          setPrintProgress(Math.min(60 + Math.floor(progress / 5), 80)); // Scale to go from 60-80%
+          setPrintStatus(`Uploading file: ${Math.round(progress)}%`);
+        },
+        (error) => {
+          console.error("Upload error:", error);
+          setPrintStatus("Error uploading file");
+          setIsLoading(false);
+        },
+        async () => {
+          try {
+            // Get download URL
+            setPrintStatus("Processing uploaded file...");
+            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+
+            // Set the preview URL
+            setFilePreviewUrl(downloadURL);
+
+            // Create an iframe for color analysis
+            const iframe = document.createElement('iframe');
+            iframe.style.display = 'none';
+            iframe.src = '/proxy-pdf.html';
+            document.body.appendChild(iframe);
+
+            // Wait for iframe to load and be ready
+            await new Promise((resolve) => {
+              const handleMessage = (event) => {
+                if (event.data.type === 'proxyReady') {
+                  window.removeEventListener('message', handleMessage);
+                  resolve();
+                }
+              };
+              window.addEventListener('message', handleMessage);
+              iframe.onload = () => {
+                // Send a ping to check if the proxy is ready
+                iframe.contentWindow.postMessage({ type: 'ping' }, '*');
+              };
+            });
+
+            setPrintStatus("Analyzing document colors...");
+
+            // Send message to iframe with PDF URL
+            iframe.contentWindow.postMessage({
+              type: 'analyzePDF',
+              pdfUrl: downloadURL,
+              filename: selectedFile.name
+            }, '*');
+
+            // Listen for color analysis results with timeout
+            const colorAnalysisResult = await Promise.race([
+              new Promise((resolve) => {
+                const handleColorAnalysis = (event) => {
+                  if (event.data.type === 'colorAnalysisComplete') {
+                    window.removeEventListener('message', handleColorAnalysis);
+                    document.body.removeChild(iframe);
+                    resolve(event.data);
+                  }
+                };
+                window.addEventListener('message', handleColorAnalysis);
+              }),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Color analysis timeout')), 30000)
+              )
+            ]).catch(error => {
+              console.error('Color analysis error:', error);
+              document.body.removeChild(iframe);
+              return { results: { hasColoredPages: false, coloredPages: [] } };
+            });
+
+            console.log('Color analysis results:', colorAnalysisResult);
+
+            // Get the storage path
+            const storagePath = uploadTask.snapshot.ref.fullPath;
+
+            // Generate unique ID for this file
+            const fileId = Date.now().toString();
+
+            // Create the database reference
+            const fileDbRef = dbRef(realtimeDb, `uploadedFiles/${fileId}`);
+
+            // Create file entry in database with color analysis results
+            await set(fileDbRef, {
+              id: fileId,
+              fileName: selectedFile.name,
+              fileUrl: downloadURL,
+              storagePath: storagePath,
+              fileType: fileToUploadFinal.type,
+              isOriginalDocx: isDocx,
+              totalPages: pageCount,
+              timestamp: new Date().toISOString(),
+              uploadedFrom: "usb",
+              status: "ready",
+              colorAnalysis: colorAnalysisResult.results
+            });
+
+            // Update status
+            setPrintStatus("File uploaded successfully!");
+            setPrintProgress(85);
+
+            // If color pages are detected, automatically set isColor to true
+            if (colorAnalysisResult.results.hasColoredPages) {
+              setIsColor(true);
+            }
+
+            // Now send for printing
+            await handlePrintFile(downloadURL, selectedFile.name, pageCount, fileId, storagePath);
+
+          } catch (error) {
+            console.error("Error finalizing upload:", error);
+            setPrintStatus("Error finalizing upload");
+            // Reset progress on error
+            setPrintProgress(0);
+            setIsLoading(false);
+          }
+        }
+      );
     } catch (error) {
-      console.error("Error rendering document:", error);
-      alert("Error rendering the document. Please try another option.");
-    } finally {
+      console.error("Error handling file:", error);
       setIsLoading(false);
+      setPrintStatus("Error processing file. Please try again.");
+      setPrintProgress(0);
     }
   };
 
@@ -498,6 +1101,46 @@ const Usb = () => {
     document.body.removeChild(downloadLink);
   };
 
+  // In the handlePrintFile function, pass along the storage path
+  const handlePrintFile = async (fileUrl, fileName, pageCount, fileId, storagePath) => {
+    try {
+      // Set the preview URL
+      setFilePreviewUrl(fileUrl);
+
+      // Set total pages
+      setTotalPages(pageCount);
+
+      // Reset loading state
+      setIsLoading(false);
+      setPrintStatus("Ready to print");
+      setPrintProgress(0);
+
+      // Create print job entry
+      const printJobRef = dbRef(realtimeDb, `files/${fileId}`);
+      await set(printJobRef, {
+        fileName: fileName,
+        fileUrl: fileUrl,
+        storagePath: storagePath,
+        printerName: selectedPrinter || "",
+        copies: copies,
+        isColor: isColor,
+        orientation: orientation,
+        selectedSize: selectedSize,
+        totalPages: pageCount,
+        price: calculatedPrice,
+        timestamp: new Date().toISOString(),
+        status: "Ready",
+        progress: 0
+      });
+
+    } catch (error) {
+      console.error("Error in handlePrintFile:", error);
+      setIsLoading(false);
+      setPrintStatus("Error preparing print job");
+      setPrintProgress(0);
+    }
+  };
+
   return (
     <ClientContainer>
       {/* Main Box Container */}
@@ -617,11 +1260,12 @@ const Usb = () => {
                   <input
                     type="file"
                     onChange={handleFileSelect}
+                    accept=".pdf,.doc,.docx"
                     className="w-full border-2 border-gray-300 rounded p-2 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-primary file:text-white hover:file:bg-primary-dark"
                   />
-                  {fileToUpload && (
+                  {isLoading && (
                     <div className="mt-2 text-sm text-gray-600">
-                      Selected: <span className="font-medium">{fileToUpload.name}</span>
+                      Uploading...
                     </div>
                   )}
                 </div>
@@ -751,15 +1395,8 @@ const Usb = () => {
           {/* Right Side - Document Preview */}
           <div className="w-1/2">
             <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200 h-full">
-              <h2 className="text-xl font-bold text-primary mb-4 flex items-center">
-                <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                  <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                  <polyline points="21 15 16 10 5 21"></polyline>
-                </svg>
-                Document Preview
-              </h2>
-              <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+
+              <div className="bg-white border border-gray-200 rounded-lg w-full h-full">
                 <DocumentPreview
                   fileUrl={filePreviewUrl}
                   fileName={fileToUpload?.name}

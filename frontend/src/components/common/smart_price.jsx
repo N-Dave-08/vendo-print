@@ -30,7 +30,7 @@ const SmartPriceToggle = ({
       // Parse custom range and count pages
       const ranges = customPageRange.split(",");
       let customPageCount = 0;
-      
+
       ranges.forEach(range => {
         if (range.includes("-")) {
           const [start, end] = range.split("-").map(num => parseInt(num));
@@ -44,7 +44,7 @@ const SmartPriceToggle = ({
           }
         }
       });
-      
+
       pageCount = customPageCount;
     }
 

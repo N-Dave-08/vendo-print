@@ -2,27 +2,41 @@ import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
 import BackendRoutes from "./routes/backend_route.js";
+import path from "path";
+import { fileURLToPath } from "url";
 
+// For ES module __dirname equivalent
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
 
 const app = express();
 
+// Increase payload limit for file uploads
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
-app.use(express.json({ limit: "Infinity" }));
-app.use(express.urlencoded({ limit: "Infinity", extended: true }));
-
-// app.use(cors({
-//   origin: "https://vendo-print.vercel.app",  
-//   methods: ["GET", "POST", "PUT", "DELETE"],
-//   allowedHeaders: ["Content-Type"],
-// }));
-
+// Configure CORS to allow all frontend origins
 app.use(cors({
-  origin: ["http://localhost:5173", "http://192.168.1.14:5173"],
+  origin: ["http://localhost:5173", "http://localhost:3000", "http://localhost:5000", "http://192.168.1.14:5173"],
   methods: ["GET", "POST", "PUT", "DELETE"],
   allowedHeaders: ["Content-Type"],
+  credentials: true
 }));
+
+// Create uploads and temp directories if they don't exist
+import fs from "fs";
+const uploadsDir = path.join(__dirname, "uploads");
+const tempDir = path.join(__dirname, "..", "temp");
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log(`Created uploads directory: ${uploadsDir}`);
+}
+if (!fs.existsSync(tempDir)) {
+  fs.mkdirSync(tempDir, { recursive: true });
+  console.log(`Created temp directory: ${tempDir}`);
+}
 
 // Request logger middleware
 app.use((req, res, next) => {
@@ -50,16 +64,18 @@ app.use((req, res, next) => {
   next();
 });
 
-// app.use(cors)
-
 // Use default route
 app.use("/api", BackendRoutes);
 
 app.get("/", (req, res) => {
-  res.send("Welcome to the Firebase-integrated server");
+  res.send("Welcome to the VendoPrint server");
 });
 
-const PORT = process.env.PORT;
-app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server running on port ${PORT}`));
+// Use explicit port 5000 if not provided in env
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📄 API endpoint: http://localhost:${PORT}/api`);
+});
 
 

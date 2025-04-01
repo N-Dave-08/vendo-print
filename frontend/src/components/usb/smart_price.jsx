@@ -41,7 +41,7 @@
 
 //  pagesToPrint = customPages.length;
 //  } else if (selectedPageOption === "All") {
- 
+
 //  pagesToPrint = totalPages;
 // }
 
@@ -53,7 +53,7 @@
 //   const totalCost = pricePerPage * copies * pagesToPrint;
 //   setCalculatedPrice(totalCost);}
 
-  
+
 //   }, [isColor, copies, totalPages, setCalculatedPrice,customPageRange, selectedPageOption,filePreviewUrl]);
 
 //   return (
@@ -96,7 +96,7 @@ function SmartPriceLabel({
 
   useEffect(() => {
     const pricePerPage = isColor ? pricing.colorPrice : pricing.bwPrice;
-    const oddPagesCount = Math.ceil(totalPages / 2);  
+    const oddPagesCount = Math.ceil(totalPages / 2);
     const evenPagesCount = Math.floor(totalPages / 2);
     let pagesToPrint = totalPages;
 

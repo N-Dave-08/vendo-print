@@ -205,54 +205,31 @@ const Printer = () => {
                     </button>
                   </div>
 
-                  {file.status === "Pending" ? (
-                    <div className="flex items-center justify-between mt-4">
-                      <span className="px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-sm font-medium">
-                        Waiting to print
+                  <div className="mt-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium text-gray-700">
+                        {file.printStatus || "Processing..."}
                       </span>
+                      <span className="text-sm font-medium text-blue-600">
+                        {file.progress || 0}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
+                      <div
+                        className={`${getProgressBarColor(file.status, file.progress)} h-2.5 rounded-full transition-all duration-300`}
+                        style={{ width: `${file.progress || 0}%` }}
+                      ></div>
+                    </div>
+                  </div>
+
+                  {file.status === "Error" && (
+                    <div className="mt-3 flex justify-end">
                       <button
                         onClick={() => startPrinting(file.id)}
-                        className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+                        className="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-xs"
                       >
-                        Start Print
+                        Retry
                       </button>
-                    </div>
-                  ) : file.status === "Error" ? (
-                    <div className="mt-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-red-700">
-                          {file.printStatus || "Error processing print job"}
-                        </span>
-                        <button
-                          onClick={() => startPrinting(file.id)}
-                          className="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-xs"
-                        >
-                          Retry
-                        </button>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2.5">
-                        <div
-                          className="bg-red-500 h-2.5 rounded-full"
-                          style={{ width: "100%" }}
-                        ></div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mt-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-gray-700">
-                          {file.printStatus || "Processing..."}
-                        </span>
-                        <span className="text-sm font-medium text-blue-600">
-                          {file.progress || 0}%
-                        </span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
-                        <div
-                          className={`${getProgressBarColor(file.status, file.progress)} h-2.5 rounded-full transition-all duration-500 ease-in-out`}
-                          style={{ width: `${file.progress || 0}%` }}
-                        ></div>
-                      </div>
                     </div>
                   )}
                 </div>

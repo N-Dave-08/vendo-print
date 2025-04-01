@@ -1,12 +1,16 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { FaArrowLeft, FaPrint, FaTimes } from "react-icons/fa";
+import { FaArrowLeft, FaPrint, FaTimes, FaCheck, FaRegFilePdf, FaRegFileWord, FaSpinner, FaFileImage } from "react-icons/fa";
 import { ezlogo } from "../assets/Icons";
 import { realtimeDb, storage } from "../../firebase/firebase_config";
 import { ref as dbRef, get, remove, update, set } from "firebase/database";
-import { ref as storageRef, deleteObject } from "firebase/storage";
+import { ref as storageRef, deleteObject, getDownloadURL } from "firebase/storage";
 import { onValue } from "firebase/database";
 import M_Qrcode from "../components/M_Qrcode";
+import DocumentPreview from "../components/common/document_preview";
+import axios from "axios";
+import { loadPDF } from '../utils/pdfjs-init';
+import SmartPriceLabel from "../components/qr/smart_price";
 
 const QRUpload = () => {
   const navigate = useNavigate();
@@ -18,11 +22,22 @@ const QRUpload = () => {
   const [selectedFile, setSelectedFile] = useState({
     fileName: queryParams.get("name") || "",
     fileUrl: queryParams.get("url") || "",
-    totalPages: parseInt(queryParams.get("pages")) || 1
+    totalPages: parseInt(queryParams.get("pages")) || 1,
+    hasColorPages: false,
+    colorPageCount: 0,
+    colorAnalysis: null
   });
 
   // QR Code modal state
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
+
+  // Print dialog state
+  const [isPrintDialogOpen, setIsPrintDialogOpen] = useState(false);
+  const [printers, setPrinters] = useState([]);
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [printSuccess, setPrintSuccess] = useState(false);
+  const [orientation, setOrientation] = useState("portrait");
+  const [selectedSize, setSelectedSize] = useState("Short Bond");
 
   // Print settings
   const [selectedPrinter, setSelectedPrinter] = useState("");
@@ -33,6 +48,12 @@ const QRUpload = () => {
   // Balance and price
   const [balance, setBalance] = useState(0);
   const [price, setPrice] = useState(0);
+
+  // Custom print dialog state
+  const [printDialogOpen, setPrintDialogOpen] = useState(false);
+
+  // Add analyzing state
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   // Fetch balance from Firebase
   useEffect(() => {
@@ -48,6 +69,20 @@ const QRUpload = () => {
     return () => unsubscribe();
   }, []);
 
+  // Fetch printers when print dialog opens
+  useEffect(() => {
+    if (isPrintDialogOpen) {
+      axios
+        .get("http://localhost:5000/api/printers")
+        .then((response) => {
+          setPrinters(response.data.printers || []);
+        })
+        .catch((error) => {
+          console.error("Failed to fetch printers:", error);
+        });
+    }
+  }, [isPrintDialogOpen]);
+
   // Calculate price based on settings
   useEffect(() => {
     if (!selectedFile.fileName) {
@@ -55,16 +90,24 @@ const QRUpload = () => {
       return;
     }
 
-    // Base price per page
-    const basePricePerPage = 5;
+    let totalPrice = 0;
 
-    // Color multiplier
-    const colorMultiplier = isColor ? 2 : 1;
+    if (selectedFile.colorAnalysis?.pageAnalysis) {
+      // Calculate price based on color analysis of each page
+      selectedFile.colorAnalysis.pageAnalysis.forEach(page => {
+        // ₱12 for colored pages, ₱10 for black and white
+        const pagePrice = isColor && page.hasColor ? 12 : 10;
+        totalPrice += pagePrice;
+      });
+    } else {
+      // If no color analysis available, use base price
+      totalPrice = selectedFile.totalPages * (isColor ? 12 : 10);
+    }
 
-    // Calculate total price
-    const calculatedPrice = basePricePerPage * selectedFile.totalPages * copies * colorMultiplier;
+    // Multiply by number of copies
+    totalPrice *= copies;
 
-    setPrice(calculatedPrice);
+    setPrice(totalPrice);
   }, [selectedFile, copies, isColor]);
 
   // Fetch uploaded files
@@ -73,12 +116,22 @@ const QRUpload = () => {
     const unsubscribe = onValue(uploadedFilesRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
-        const filesArray = Object.keys(data).map((key) => ({
-          id: key,
-          ...data[key],
-        }))
+        const filesArray = Object.keys(data).map((key) => {
+          // Ensure totalPages is a valid number
+          let fileData = {
+            id: key,
+            ...data[key],
+            totalPages: data[key].totalPages || 1
+          };
+
+          // Log file data for debugging
+          if (fileData.fileName.toLowerCase().endsWith('.pdf')) {
+            // Removed PDF loading log
+          }
+
+          return fileData;
+        })
           // Filter to only include files that were uploaded via QR
-          // Files uploaded via QR should have a uploadSource field set to "qr"
           .filter(file => file.uploadSource === "qr");
 
         setUploadedFiles(filesArray);
@@ -91,20 +144,24 @@ const QRUpload = () => {
   }, []);
 
   // Handle file deletion
-  const handleDeleteFile = async (fileId, fileName) => {
+  const handleDeleteFile = async (fileId, fileUrl) => {
     if (!window.confirm("Are you sure you want to delete this file?")) return;
 
     try {
+      // Extract the full path from the fileUrl
+      const fileUrlObj = new URL(fileUrl);
+      const pathFromUrl = decodeURIComponent(fileUrlObj.pathname.split('/o/')[1].split('?')[0]);
+
       // Delete from Storage
-      const fileRef = storageRef(storage, `uploads/${fileName}`);
+      const fileRef = storageRef(storage, pathFromUrl);
       await deleteObject(fileRef);
 
       // Delete from Database
       await remove(dbRef(realtimeDb, `uploadedFiles/${fileId}`));
 
       // Clear selection if deleted file was selected
-      if (selectedFile.fileName === fileName) {
-        setSelectedFile({ fileName: "", fileUrl: "", totalPages: 1 });
+      if (selectedFile.fileUrl === fileUrl) {
+        setSelectedFile({ fileName: "", fileUrl: "", totalPages: 1, hasColorPages: false, colorPageCount: 0, colorAnalysis: null });
       }
     } catch (error) {
       console.error("Error deleting file:", error);
@@ -113,12 +170,105 @@ const QRUpload = () => {
   };
 
   // Handle file selection
-  const handleSelectFile = (file) => {
-    setSelectedFile({
-      fileName: file.fileName,
-      fileUrl: file.fileUrl,
-      totalPages: file.totalPages
-    });
+  const handleSelectFile = async (file) => {
+    console.log("Selected file:", file);
+
+    try {
+      // Create an iframe for color analysis
+      const iframe = document.createElement('iframe');
+      iframe.style.display = 'none';
+      iframe.src = '/proxy-pdf.html';
+      document.body.appendChild(iframe);
+
+      // Wait for iframe to load
+      await new Promise((resolve) => {
+        iframe.onload = resolve;
+      });
+
+      // Send message to iframe with PDF URL
+      iframe.contentWindow.postMessage({
+        type: 'analyzePDF',
+        pdfUrl: file.fileUrl,
+        filename: file.fileName
+      }, '*');
+
+      // Listen for color analysis results
+      const colorAnalysisResult = await new Promise((resolve) => {
+        window.addEventListener('message', function onMessage(event) {
+          if (event.data.type === 'colorAnalysisComplete') {
+            window.removeEventListener('message', onMessage);
+            document.body.removeChild(iframe);
+            resolve(event.data);
+          }
+        });
+      });
+
+      console.log('Color analysis results:', colorAnalysisResult);
+
+      // Determine the proper file type
+      let fileType = 'application/pdf';
+
+      // Check if this is a converted DOCX file
+      if (file.originalType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" &&
+        file.fileType === "application/pdf") {
+        fileType = "application/pdf";
+      }
+      // Otherwise detect based on file extension
+      else if (file.fileName.toLowerCase().endsWith('.pdf')) {
+        fileType = "application/pdf";
+      }
+      else if (file.fileName.toLowerCase().endsWith('.docx') || file.fileName.toLowerCase().endsWith('.doc')) {
+        fileType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+      }
+      else if (file.fileName.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp)$/)) {
+        fileType = "image/" + file.fileName.toLowerCase().split('.').pop().replace('jpg', 'jpeg');
+      }
+
+      // Set the file with color analysis results
+      setSelectedFile({
+        fileName: file.fileName,
+        fileUrl: file.fileUrl,
+        totalPages: file.totalPages || 1,
+        fileType: fileType,
+        hasColorPages: colorAnalysisResult.results.hasColoredPages,
+        colorPageCount: colorAnalysisResult.results.coloredPageCount,
+        colorAnalysis: colorAnalysisResult.results
+      });
+
+      // If there are colored pages, automatically set isColor to true
+      if (colorAnalysisResult.results.hasColoredPages) {
+        setIsColor(true);
+      }
+
+      console.log(`File selected with ${file.totalPages} pages and type ${fileType}`);
+
+    } catch (error) {
+      console.error("Error handling file selection:", error);
+      // Set file without color analysis in case of error
+      setSelectedFile({
+        fileName: file.fileName,
+        fileUrl: file.fileUrl,
+        totalPages: file.totalPages || 1,
+        fileType: file.fileType,
+        hasColorPages: false,
+        colorPageCount: 0,
+        colorAnalysis: null
+      });
+    }
+  };
+
+  // Handle print dialog
+  const openPrintDialog = () => {
+    if (selectedFile.fileUrl) {
+      setIsPrintDialogOpen(true);
+    } else {
+      alert("Please select a file to print");
+    }
+  };
+
+  const closePrintDialog = () => {
+    setIsPrintDialogOpen(false);
+    setPrintSuccess(false);
   };
 
   // Handle print
@@ -133,10 +283,18 @@ const QRUpload = () => {
       return;
     }
 
-    setIsLoading(true);
+    if (!selectedPrinter) {
+      alert("Please select a printer");
+      return;
+    }
+
     try {
       // Create a unique ID for the print job
       const printJobId = Date.now().toString();
+
+      // First, navigate to printer page
+      setIsPrintDialogOpen(false);
+      navigate('/printer');
 
       // Add to print queue with the unique ID
       const printJobRef = dbRef(realtimeDb, `files/${printJobId}`);
@@ -145,14 +303,18 @@ const QRUpload = () => {
       await set(printJobRef, {
         fileName: selectedFile.fileName,
         fileUrl: selectedFile.fileUrl,
-        printerName: selectedPrinter || "default",
+        printerName: selectedPrinter,
         copies: copies,
         isColor: isColor,
+        hasColorContent: selectedFile.hasColorPages,
+        colorPageCount: selectedFile.colorPageCount,
+        orientation: orientation,
+        selectedSize: selectedSize,
         totalPages: selectedFile.totalPages,
         price: price,
         timestamp: new Date().toISOString(),
         status: "Processing",
-        progress: 5,
+        progress: 0,
         printStatus: "Preparing print job..."
       });
 
@@ -160,43 +322,30 @@ const QRUpload = () => {
       const updatedBalance = balance - price;
       await update(dbRef(realtimeDb, "coinCount"), { availableCoins: updatedBalance });
 
-      // Immediately redirect to printer page
-      navigate('/printer');
-
-      // Simulate print progress in the background with more detailed steps
-      const progressSteps = [
-        { progress: 15, status: "Processing document...", delay: 800 },
-        { progress: 30, status: "Configuring printer settings...", delay: 1500 },
-        { progress: 45, status: "Converting document format...", delay: 2200 },
-        { progress: 60, status: "Connecting to printer...", delay: 3000 },
-        { progress: 75, status: "Sending to printer...", delay: 3800 },
-        { progress: 85, status: "Printing in progress...", delay: 4500 },
-        { progress: 95, status: "Finishing print job...", delay: 5200 },
-      ];
-
-      // Update progress in the background
-      for (const step of progressSteps) {
-        setTimeout(() => {
-          update(printJobRef, {
-            progress: step.progress,
-            printStatus: step.status
-          });
-        }, step.delay);
-      }
-
-      // Complete the job after all steps
-      setTimeout(() => {
-        update(printJobRef, {
-          status: "Done",
-          progress: 100,
-          printStatus: "Print job completed"
-        });
-      }, 6000);
+      // Send the actual print request to the server
+      await axios.post('http://localhost:5000/api/print', {
+        fileUrl: selectedFile.fileUrl,
+        fileName: selectedFile.fileName,
+        printerName: selectedPrinter,
+        copies: copies,
+        isColor: isColor,
+        hasColorContent: selectedFile.hasColorPages,
+        colorPageCount: selectedFile.colorPageCount,
+        orientation: orientation,
+        selectedSize: selectedSize,
+        printJobId: printJobId
+      });
 
     } catch (error) {
       console.error("Print error:", error);
+      // Update the job status to error in case of failure
+      const printJobRef = dbRef(realtimeDb, `files/${printJobId}`);
+      await update(printJobRef, {
+        status: "Error",
+        progress: 0,
+        printStatus: "Failed to start print job"
+      });
       alert("Failed to print. Please try again.");
-      setIsLoading(false);
     }
   };
 
@@ -208,6 +357,79 @@ const QRUpload = () => {
   // Handle closing QR code modal
   const handleCloseQrModal = () => {
     setIsQrModalOpen(false);
+  };
+
+  // Function to refresh Firebase URL when token expires
+  const fallbackToDbRefresh = async (file) => {
+    if (!file.fileName || !file.fileUrl) return;
+
+    console.log("Using Firebase Storage method to refresh URL");
+    try {
+      const fileUrlObj = new URL(file.fileUrl);
+      const pathFromUrl = decodeURIComponent(fileUrlObj.pathname.split('/o/')[1].split('?')[0]);
+
+      // First try the backend endpoint
+      try {
+        console.log("Requesting fresh URL from backend endpoint");
+        const response = await axios.get(`http://localhost:5000/api/refresh-url?path=${encodeURIComponent(pathFromUrl)}`);
+
+        if (response.data && response.data.status === 'success' && response.data.url) {
+          const freshUrl = response.data.url;
+          const expiresAt = response.data.expiresAt;
+
+          console.log("Got fresh URL from backend endpoint, expires at:", new Date(expiresAt));
+
+          // Update the file in database if we have an ID
+          if (file.id) {
+            const fileRef = dbRef(realtimeDb, `uploadedFiles/${file.id}`);
+            await update(fileRef, {
+              fileUrl: freshUrl,
+              storagePath: pathFromUrl,
+              lastRefreshed: Date.now(),
+              urlExpiresAt: expiresAt
+            });
+          }
+
+          // Update the selected file
+          setSelectedFile(prev => ({
+            ...prev,
+            fileUrl: freshUrl
+          }));
+
+          console.log("Successfully refreshed Firebase URL");
+          return freshUrl;
+        }
+      } catch (backendError) {
+        console.error("Error using backend endpoint:", backendError);
+      }
+
+      // Fallback to direct Firebase Storage if backend fails
+      console.log("Falling back to direct Firebase Storage refresh");
+      const fileStorageRef = storageRef(storage, pathFromUrl);
+      const freshUrl = await getDownloadURL(fileStorageRef);
+
+      // Update the file in database
+      if (file.id) {
+        const fileRef = dbRef(realtimeDb, `uploadedFiles/${file.id}`);
+        await update(fileRef, {
+          fileUrl: freshUrl,
+          storagePath: pathFromUrl,
+          lastRefreshed: Date.now()
+        });
+      }
+
+      // Update the selected file
+      setSelectedFile(prev => ({
+        ...prev,
+        fileUrl: freshUrl
+      }));
+
+      return freshUrl;
+    } catch (error) {
+      console.error("Error refreshing Firebase URL:", error);
+      setIsLoading(false);
+      throw error;
+    }
   };
 
   return (
@@ -243,6 +465,220 @@ const QRUpload = () => {
                   <span>Click outside to close</span>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Print Dialog Modal */}
+      {isPrintDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-5xl mx-4 transform transition-all animate-fadeIn flex flex-col h-[85vh]">
+            <div className="flex justify-between items-center px-6 py-3 border-b">
+              <h2 className="text-xl font-bold text-[#31304D]">Print</h2>
+              <span className="text-gray-600 text-sm">{selectedFile.totalPages} sheets of paper</span>
+              <button
+                onClick={closePrintDialog}
+                className="text-gray-500 hover:text-gray-700 transition duration-200"
+              >
+                <FaTimes size={20} />
+              </button>
+            </div>
+
+            <div className="flex flex-1 overflow-hidden">
+              {/* Document Preview Area - Left Side */}
+              <div className="w-3/5 border-r flex flex-col h-full">
+                <div className="flex-1 flex justify-center items-center bg-[#f8f9fa] p-3">
+                  <div className="shadow-md bg-white w-[95%] h-[95%] flex items-center justify-center relative">
+                    {selectedFile.fileType?.startsWith('image/') || selectedFile.fileName.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp)$/) ? (
+                      <div className="w-full h-full flex items-center justify-center bg-gray-50">
+                        <img
+                          src={selectedFile.fileUrl}
+                          alt={selectedFile.fileName}
+                          className="max-w-full max-h-full object-contain"
+                        />
+                      </div>
+                    ) : (
+                      <DocumentPreview
+                        fileUrl={selectedFile.fileUrl}
+                        fileName={selectedFile.fileName}
+                      />
+                    )}
+                  </div>
+                </div>
+                <div className="py-1 px-3 bg-gray-100 border-t flex justify-center">
+                  <div className="flex items-center space-x-2 text-xs text-gray-600">
+                    <span>Pages: {selectedFile.totalPages}</span>
+                    {selectedFile.hasColorPages && (
+                      <span className="bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded-full">
+                        {selectedFile.colorPageCount} color {selectedFile.colorPageCount === 1 ? 'page' : 'pages'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Print Settings Area - Right Side */}
+              <div className="w-2/5 p-4 flex flex-col h-full">
+                <div className="grid grid-cols-1 gap-2">
+                  {/* Destination/Printer selection */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Destination
+                    </label>
+                    <select
+                      value={selectedPrinter}
+                      onChange={(e) => setSelectedPrinter(e.target.value)}
+                      className="w-full px-3 py-1.5 border rounded-md bg-white text-gray-900 shadow-sm"
+                    >
+                      <option value="">Select a printer...</option>
+                      {Array.isArray(printers) && printers.length > 0 ? (
+                        printers.map((printer, index) => (
+                          <option key={index} value={printer.name}>
+                            {printer.name}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="">No printers available</option>
+                      )}
+                    </select>
+                  </div>
+
+                  {/* Pages and Copies in two columns */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Pages
+                      </label>
+                      <select
+                        className="w-full px-3 py-1.5 border rounded-md bg-white text-gray-900 shadow-sm"
+                        defaultValue="All"
+                      >
+                        <option value="All">All</option>
+                        <option value="Custom">Custom</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Copies
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="10"
+                        value={copies}
+                        onChange={(e) => setCopies(parseInt(e.target.value) || 1)}
+                        className="w-full px-3 py-1.5 border rounded-md bg-white text-gray-900 shadow-sm"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Layout and Color in two columns */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Layout
+                      </label>
+                      <select
+                        value={orientation}
+                        onChange={(e) => setOrientation(e.target.value)}
+                        className="w-full px-3 py-1.5 border rounded-md bg-white text-gray-900 shadow-sm"
+                      >
+                        <option value="portrait">Portrait</option>
+                        <option value="landscape">Landscape</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Color
+                      </label>
+                      <select
+                        value={isColor ? "Color" : "Black and white"}
+                        onChange={(e) => setIsColor(e.target.value === "Color")}
+                        className="w-full px-3 py-1.5 border rounded-md bg-white text-gray-900 shadow-sm"
+                      >
+                        <option value="Color">
+                          Color {selectedFile.hasColorPages ? `(${selectedFile.colorPageCount} color pages detected)` : ''}
+                        </option>
+                        <option value="Black and white">Black and white</option>
+                      </select>
+                      {selectedFile.hasColorPages && !isColor && (
+                        <div className="mt-1 text-xs text-amber-600">
+                          This document contains color content. Printing in black & white may affect quality.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Paper size */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Paper size
+                    </label>
+                    <select
+                      value={selectedSize}
+                      onChange={(e) => setSelectedSize(e.target.value)}
+                      className="w-full px-3 py-1.5 border rounded-md bg-white text-gray-900 shadow-sm"
+                    >
+                      <option value="Short Bond">Letter (8.5 × 11 in)</option>
+                      <option value="A4">A4 (210 × 297 mm)</option>
+                      <option value="Legal">Legal (8.5 × 14 in)</option>
+                    </select>
+                  </div>
+
+                  {/* More settings disclosure */}
+                  <div className="mt-1 flex items-center justify-between border-t pt-2">
+                    <button className="flex items-center justify-between w-full text-sm text-gray-700">
+                      <span className="font-medium">More settings</span>
+                      <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  {/* Price & Balance information */}
+                  <div className="flex justify-between pt-2 pb-1 border-t mt-1">
+                    <span className="text-gray-700">Price:</span>
+                    <span className="font-semibold">{price} coins</span>
+                    {selectedFile.hasColorPages && isColor && (
+                      <span className="text-xs text-orange-600">
+                        *Price includes color surcharge
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-4 p-3 border-t">
+              <button
+                className="px-6 py-1.5 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 transition duration-200"
+                onClick={closePrintDialog}
+              >
+                Cancel
+              </button>
+              <button
+                className={`px-6 py-1.5 rounded-md text-white flex items-center space-x-2 ${selectedFile && selectedPrinter && balance >= price && !isPrinting
+                  ? 'bg-[#31304D] hover:bg-[#282740] transition duration-200'
+                  : 'bg-gray-400 cursor-not-allowed'
+                  }`}
+                onClick={handlePrint}
+                disabled={!selectedFile || !selectedPrinter || balance < price || isPrinting}
+              >
+                {isPrinting ? (
+                  <>
+                    <FaSpinner className="animate-spin" />
+                    <span>Processing...</span>
+                  </>
+                ) : (
+                  <>
+                    <FaPrint />
+                    <span>Print</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>
@@ -295,45 +731,24 @@ const QRUpload = () => {
                 Balance: <span className="text-green-500">{balance}</span> coins
               </p>
 
-              <p className="text-xl font-bold text-[#31304D]">
-                Smart Price: <span className="text-green-500">₱{price.toFixed(2)}</span>
-              </p>
+              {/* Smart Price Label */}
+              <SmartPriceLabel
+                isColor={isColor}
+                copies={copies}
+                totalPages={selectedFile.totalPages}
+                calculatedPrice={price}
+                setCalculatedPrice={setPrice}
+                customPageRange=""
+                selectedPageOption="All"
+                filePreviewUrl={selectedFile.fileUrl}
+                colorAnalysis={selectedFile.colorAnalysis}
+              />
             </div>
 
-            {/* Print Options */}
+            {/* Print Button */}
             <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
-              <div className="flex flex-wrap justify-between items-center mb-4">
-                <h2 className="text-xl font-bold text-[#31304D]">Print Options</h2>
-
-                <div className="flex items-center space-x-6 my-2">
-                  <div className="flex items-center">
-                    <input
-                      id="color-print"
-                      type="checkbox"
-                      className="w-4 h-4 text-[#31304D] border-gray-300 rounded focus:ring-[#31304D]"
-                      checked={isColor}
-                      onChange={(e) => setIsColor(e.target.checked)}
-                    />
-                    <label htmlFor="color-print" className="ml-2 text-sm font-medium text-gray-700">Color</label>
-                  </div>
-
-                  <div className="flex items-center">
-                    <label htmlFor="copies" className="text-sm font-medium text-gray-700 mr-2">Copies:</label>
-                    <input
-                      id="copies"
-                      type="number"
-                      min="1"
-                      max="99"
-                      className="w-16 p-1 text-sm border border-gray-300 rounded-md"
-                      value={copies}
-                      onChange={(e) => setCopies(parseInt(e.target.value))}
-                    />
-                  </div>
-                </div>
-              </div>
-
               <button
-                onClick={handlePrint}
+                onClick={openPrintDialog}
                 disabled={!selectedFile.fileName || isLoading}
                 className={`w-full py-3 flex items-center justify-center rounded-lg font-bold text-lg transition-all duration-200 ${!selectedFile.fileName || isLoading
                   ? "bg-gray-300 text-gray-500 cursor-not-allowed"
@@ -346,12 +761,12 @@ const QRUpload = () => {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    Printing...
+                    {isAnalyzing ? "Analyzing PDF..." : "Processing..."}
                   </>
                 ) : (
                   <>
                     <FaPrint className="mr-2" />
-                    Print Document
+                    Print
                   </>
                 )}
               </button>
@@ -393,7 +808,17 @@ const QRUpload = () => {
                       >
                         {/* File Icon */}
                         <div className="mb-2 relative">
-                          {file.fileName.toLowerCase().endsWith('.pdf') ? (
+                          {file.fileType?.startsWith('image/') || file.fileName.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp)$/) ? (
+                            <div className="w-20 h-24 relative">
+                              <div className="absolute inset-0 bg-white border border-gray-200 rounded-sm shadow overflow-hidden">
+                                <img
+                                  src={file.fileUrl}
+                                  alt={file.fileName}
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                            </div>
+                          ) : file.fileName.toLowerCase().endsWith('.pdf') ? (
                             <div className="w-20 h-24 relative">
                               <div className="absolute inset-0 bg-white border border-gray-200 rounded-sm shadow"></div>
                               <div className="absolute left-0 top-0 w-12 h-12 bg-red-500 flex items-center justify-center">
@@ -404,18 +829,11 @@ const QRUpload = () => {
                                   <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z" />
                                 </svg>
                               </div>
-                            </div>
-                          ) : file.fileName.toLowerCase().endsWith('.pptx') ? (
-                            <div className="w-20 h-24 relative">
-                              <div className="absolute inset-0 bg-white border border-gray-200 rounded-sm shadow"></div>
-                              <div className="absolute left-0 top-0 w-12 h-12 bg-orange-500 flex items-center justify-center">
-                                <span className="text-white font-bold text-2xl">P</span>
-                              </div>
-                              <div className="absolute right-0 top-5 w-8 h-8">
-                                <svg viewBox="0 0 24 24" className="w-full h-full text-orange-300" fill="currentColor">
-                                  <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z" />
-                                </svg>
-                              </div>
+                              {file.hasColorPages && (
+                                <div className="absolute right-0 bottom-0 w-6 h-6 bg-yellow-400 rounded-tl-lg flex items-center justify-center">
+                                  <span className="text-white font-bold text-xs" title={`${file.colorPageCount} color pages`}>C</span>
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <div className="w-20 h-24 relative">
@@ -435,7 +853,7 @@ const QRUpload = () => {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleDeleteFile(file.id, file.fileName);
+                              handleDeleteFile(file.id, file.fileUrl);
                             }}
                             className="absolute -top-2 -right-2 bg-white rounded-full w-6 h-6 flex items-center justify-center shadow-sm border border-gray-200 text-gray-400 hover:text-red-500"
                             aria-label="Delete file"
@@ -448,7 +866,11 @@ const QRUpload = () => {
                         <div className="text-center w-full">
                           <p className="text-sm font-medium text-gray-800 truncate">{file.fileName}</p>
                           <p className="text-xs text-gray-500">
-                            {file.totalPages} {file.totalPages === 1 ? 'page' : 'pages'} • {new Date(file.uploadedAt).toLocaleDateString()}
+                            {file.totalPages} {file.totalPages === 1 ? 'page' : 'pages'}
+                            {file.hasColorPages && (
+                              <span className="ml-1 text-amber-600">• {file.colorPageCount} color</span>
+                            )}
+                            <span className="ml-1">• {new Date(file.uploadedAt).toLocaleDateString()}</span>
                           </p>
                         </div>
                       </div>

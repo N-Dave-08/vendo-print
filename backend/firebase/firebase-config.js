@@ -1,10 +1,10 @@
 import { initializeApp } from "firebase/app";
 import { getDatabase } from "firebase/database";
-import { getStorage } from "firebase/storage";
+import { getStorage, connectStorageEmulator } from "firebase/storage";
 import { getFirestore } from "firebase/firestore";
 
 
-const firebaseConfig = {
+export const firebaseConfig = {
   apiKey: "AIzaSyCGoFNIbWJ9OiTzMc46rSnoMvxNG2CcCyc",
   authDomain: "ezprint-4258e.firebaseapp.com",
   databaseURL: "https://ezprint-4258e-default-rtdb.firebaseio.com",
@@ -17,6 +17,12 @@ const firebaseConfig = {
 // Initialize Firebase
 const firebaseApp = initializeApp(firebaseConfig);
 const realtimeDb = getDatabase(firebaseApp);
+
+// Initialize Storage with custom settings
 const storage = getStorage(firebaseApp);
+
+// Set custom token duration (7 days in seconds)
+storage._customTokenDuration = 7 * 24 * 60 * 60;
+
 export const db = getFirestore(firebaseApp);
-export {realtimeDb, storage};
+export { realtimeDb, storage };

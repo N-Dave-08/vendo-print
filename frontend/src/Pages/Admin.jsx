@@ -13,7 +13,7 @@ import {
 } from 'chart.js';
 import { getDatabase, ref as dbRef, get } from "firebase/database";
 import M_Password from '../components/M_Password';
-import SetPricing from '../components/admin/setPricing';
+import SetPricing from '../components/admin/SetPricing';
 
 // Register ChartJS components
 ChartJS.register(
@@ -136,9 +136,9 @@ const Admin = () => {
       </h1>
 
       {/* Set Pricing Card */}
-      {/* <div className>
+      <div>
         <SetPricing />
-      </div> */}
+      </div>
 
       {/* Charts Section */}
       <div className="flex flex-col lg:flex-row w-full gap-6">
