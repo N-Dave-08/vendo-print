@@ -34,7 +34,6 @@ const Xerox = () => {
   const [copies, setCopies] = useState(1);
   const [selectedSize, setSelectedSize] = useState("Short Bond");
   const [isColor, setIsColor] = useState(false);
-  const [orientation, setOrientation] = useState("portrait");
 
   // Print status for progress tracking
   const [printStatus, setPrintStatus] = useState("");
@@ -228,7 +227,6 @@ const Xerox = () => {
         copies: copies,
         selectedSize,
         isColor,
-        orientation,
         totalPages,
         price: calculatedPrice,
         progress: 5, // Start with 5% right away
@@ -278,7 +276,6 @@ const Xerox = () => {
         copies: copies,
         selectedSize,
         isColor,
-        orientation,
         totalPages,
         fileType: "jpg", // Explicitly set the file type as jpg for scanned documents
         contentType: "image/jpeg",  // Add MIME type information
@@ -392,37 +389,6 @@ const Xerox = () => {
                   <option value="A4">A4 (8.3 x 11.7)</option>
                   <option value="Long Bond">Long Bond (8.5 x 14)</option>
                 </select>
-              </div>
-
-              {/* Orientation */}
-              <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Orientation
-                </label>
-                <div className="flex gap-4">
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      name="orientation"
-                      value="portrait"
-                      checked={orientation === "portrait"}
-                      onChange={() => setOrientation("portrait")}
-                      className="w-4 h-4 text-[#31304D] border-gray-300 focus:ring-[#31304D]"
-                    />
-                    <span className="ml-2 text-sm font-medium text-gray-700">Portrait</span>
-                  </label>
-                  <label className="flex items-center">
-                    <input
-                      type="radio"
-                      name="orientation"
-                      value="landscape"
-                      checked={orientation === "landscape"}
-                      onChange={() => setOrientation("landscape")}
-                      className="w-4 h-4 text-[#31304D] border-gray-300 focus:ring-[#31304D]"
-                    />
-                    <span className="ml-2 text-sm font-medium text-gray-700">Landscape</span>
-                  </label>
-                </div>
               </div>
 
               {/* Color Selection */}

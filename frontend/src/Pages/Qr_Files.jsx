@@ -3,8 +3,8 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { FaArrowLeft, FaPrint, FaTimes, FaCheck, FaRegFilePdf, FaRegFileWord, FaSpinner, FaFileImage } from "react-icons/fa";
 import { ezlogo } from "../assets/Icons";
 import { realtimeDb, storage } from "../../firebase/firebase_config";
-import { ref as dbRef, get, remove, update, set } from "firebase/database";
-import { ref as storageRef, deleteObject, getDownloadURL } from "firebase/storage";
+import { ref as dbRef, get, remove, update, set, push } from "firebase/database";
+import { ref as storageRef, deleteObject, getDownloadURL, uploadBytesResumable } from "firebase/storage";
 import { onValue } from "firebase/database";
 import M_Qrcode from "../components/M_Qrcode";
 import DocumentPreview from "../components/common/document_preview";
@@ -54,6 +54,10 @@ const QRUpload = () => {
 
   // Add analyzing state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  // Add upload progress state
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [error, setError] = useState("");
 
   // Fetch balance from Firebase
   useEffect(() => {
@@ -142,6 +146,84 @@ const QRUpload = () => {
 
     return () => unsubscribe();
   }, []);
+
+  // Add a new useEffect to analyze files when component mounts
+  useEffect(() => {
+    // Only run if there are uploaded files but no analysis yet
+    const filesToAnalyze = uploadedFiles.filter(file =>
+      file.fileUrl &&
+      !file.colorAnalysis &&
+      (file.fileName.toLowerCase().endsWith('.pdf') || file.fileName.toLowerCase().endsWith('.docx') || file.fileName.toLowerCase().endsWith('.doc'))
+    );
+
+    if (filesToAnalyze.length > 0) {
+      // Process files one by one to avoid overwhelming the browser
+      const analyzeNextFile = async (index) => {
+        if (index >= filesToAnalyze.length) return;
+
+        const file = filesToAnalyze[index];
+        console.log(`Analyzing file ${index + 1}/${filesToAnalyze.length}: ${file.fileName}`);
+
+        try {
+          // Create an iframe for color analysis
+          const iframe = document.createElement('iframe');
+          iframe.style.display = 'none';
+          iframe.src = '/proxy-pdf.html';
+          document.body.appendChild(iframe);
+
+          // Wait for iframe to load
+          await new Promise((resolve) => {
+            iframe.onload = resolve;
+          });
+
+          // Send message to iframe with PDF URL
+          iframe.contentWindow.postMessage({
+            type: 'analyzePDF',
+            pdfUrl: file.fileUrl,
+            filename: file.fileName
+          }, '*');
+
+          // Listen for color analysis results
+          const colorAnalysisResult = await new Promise((resolve) => {
+            const handler = function (event) {
+              if (event.data.type === 'colorAnalysisComplete') {
+                window.removeEventListener('message', handler);
+                document.body.removeChild(iframe);
+                resolve(event.data);
+              }
+            };
+            window.addEventListener('message', handler);
+          });
+
+          if (colorAnalysisResult.results) {
+            // Calculate accurate page count
+            const accuratePageCount = colorAnalysisResult.results.pageAnalysis ?
+              colorAnalysisResult.results.pageAnalysis.length : file.totalPages || 1;
+
+            // Update the file in the database
+            const fileRef = dbRef(realtimeDb, `uploadedFiles/${file.id}`);
+            update(fileRef, {
+              totalPages: accuratePageCount,
+              hasColorPages: colorAnalysisResult.results.hasColoredPages,
+              colorPageCount: colorAnalysisResult.results.coloredPageCount,
+              colorAnalysis: colorAnalysisResult.results
+            });
+          }
+
+          // Process next file with a small delay
+          setTimeout(() => analyzeNextFile(index + 1), 500);
+
+        } catch (error) {
+          console.error(`Error analyzing file ${file.fileName}:`, error);
+          // Continue with next file even if current one fails
+          setTimeout(() => analyzeNextFile(index + 1), 500);
+        }
+      };
+
+      // Start analysis process
+      analyzeNextFile(0);
+    }
+  }, [uploadedFiles]);
 
   // Handle file deletion
   const handleDeleteFile = async (fileId, fileUrl) => {
@@ -429,6 +511,157 @@ const QRUpload = () => {
       console.error("Error refreshing Firebase URL:", error);
       setIsLoading(false);
       throw error;
+    }
+  };
+
+  const handleFileUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    setIsLoading(true);
+    setError("");
+
+    try {
+      // Check if it's a DOCX file
+      if (file.name.toLowerCase().endsWith('.docx') || file.name.toLowerCase().endsWith('.doc')) {
+        // Create form data for the file
+        const formData = new FormData();
+        formData.append('file', file);
+
+        // Send to backend for conversion
+        const response = await axios.post('http://localhost:5000/api/convert-docx', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+          onUploadProgress: (progressEvent) => {
+            const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            setUploadProgress(percentCompleted);
+          },
+        });
+
+        if (response.data.pdfUrl) {
+          // Use the converted PDF URL
+          handleUploadSuccess(response.data.pdfUrl, file.name, "application/pdf");
+        } else {
+          throw new Error('PDF conversion failed');
+        }
+      } else {
+        // Handle other file types normally
+        const storageRef = ref(storage, `uploads/${Date.now()}_${file.name}`);
+        const uploadTask = uploadBytesResumable(storageRef, file);
+
+        uploadTask.on(
+          'state_changed',
+          (snapshot) => {
+            const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+            setUploadProgress(progress);
+          },
+          (error) => {
+            console.error('Upload error:', error);
+            setError('Failed to upload file. Please try again.');
+            setIsLoading(false);
+          },
+          async () => {
+            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+            handleUploadSuccess(downloadURL, file.name, file.type);
+          }
+        );
+      }
+    } catch (error) {
+      console.error('File handling error:', error);
+      setError(error.message || 'Failed to process file. Please try again.');
+      setIsLoading(false);
+    }
+  };
+
+  const handleUploadSuccess = async (fileUrl, fileName, fileType) => {
+    try {
+      let fileMetadata = {
+        fileName,
+        fileUrl,
+        fileType,
+        uploadedAt: new Date().toISOString(),
+        uploadSource: "qr",
+        status: "ready",
+        totalPages: 1 // Default page count that will be updated after analysis
+      };
+
+      // For converted DOCX files, track the original format
+      if (fileName.toLowerCase().endsWith('.docx') && fileType === "application/pdf") {
+        fileMetadata.originalFormat = "docx";
+        fileMetadata.isConverted = true;
+      }
+
+      // Create a new entry in the realtime database
+      const newFileRef = push(dbRef(realtimeDb, 'uploadedFiles'));
+      const fileId = newFileRef.key;
+
+      await set(newFileRef, fileMetadata);
+
+      // For PDF files, immediately start the analysis process
+      if (fileType === "application/pdf" || fileName.toLowerCase().endsWith('.pdf')) {
+        try {
+          // Set state to show we're analyzing
+          setIsAnalyzing(true);
+
+          // Create an iframe for color analysis
+          const iframe = document.createElement('iframe');
+          iframe.style.display = 'none';
+          iframe.src = '/proxy-pdf.html';
+          document.body.appendChild(iframe);
+
+          // Wait for iframe to load
+          await new Promise((resolve) => {
+            iframe.onload = resolve;
+          });
+
+          // Send message to iframe with PDF URL
+          iframe.contentWindow.postMessage({
+            type: 'analyzePDF',
+            pdfUrl: fileUrl,
+            filename: fileName
+          }, '*');
+
+          // Listen for color analysis results
+          const colorAnalysisResult = await new Promise((resolve) => {
+            const handler = function (event) {
+              if (event.data.type === 'colorAnalysisComplete') {
+                window.removeEventListener('message', handler);
+                document.body.removeChild(iframe);
+                resolve(event.data);
+              }
+            };
+            window.addEventListener('message', handler);
+          });
+
+          if (colorAnalysisResult.results) {
+            // Calculate accurate page count based on color analysis
+            const accuratePageCount = colorAnalysisResult.results.pageAnalysis ?
+              colorAnalysisResult.results.pageAnalysis.length : 1;
+
+            // Update the file in the database with the accurate page count
+            await update(dbRef(realtimeDb, `uploadedFiles/${fileId}`), {
+              totalPages: accuratePageCount,
+              hasColorPages: colorAnalysisResult.results.hasColoredPages,
+              colorPageCount: colorAnalysisResult.results.coloredPageCount,
+              colorAnalysis: colorAnalysisResult.results
+            });
+
+            console.log(`Updated file ${fileName} with ${accuratePageCount} pages`);
+          }
+        } catch (error) {
+          console.error("Error analyzing PDF:", error);
+        } finally {
+          setIsAnalyzing(false);
+        }
+      }
+
+      setIsLoading(false);
+      setUploadProgress(0);
+    } catch (error) {
+      console.error('Database update error:', error);
+      setError('Failed to save file information. Please try again.');
+      setIsLoading(false);
     }
   };
 
@@ -798,7 +1031,7 @@ const QRUpload = () => {
                     </p>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                     {uploadedFiles.map((file) => (
                       <div
                         key={file.id}

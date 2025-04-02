@@ -15,11 +15,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
 import multer from 'multer';
+import FormData from 'form-data';
 // Import the conversion service
 import { convertDocxToPdf, cleanupTempFiles, checkLibreOffice } from '../services/conversion_service.js';
 // Import Firebase storage reference
 import { storage } from "../firebase/firebase-config.js";
-import { ref as storageRef, getDownloadURL } from "firebase/storage";
+import { ref as storageRef, getDownloadURL, uploadBytes } from "firebase/storage";
 import axios from 'axios';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -204,11 +205,10 @@ BackendRoutes.post('/xerox/print', async (req, res) => {
   }
 });
 
-// Add a new route for DOCX to PDF conversion
+// Update the DOCX to PDF conversion route
 BackendRoutes.post('/convert-docx', upload.single('file'), async (req, res) => {
   console.log('✅ Received conversion request');
 
-  // Check if file was uploaded
   if (!req.file) {
     console.error('❌ No file uploaded');
     return res.status(400).json({
@@ -217,7 +217,6 @@ BackendRoutes.post('/convert-docx', upload.single('file'), async (req, res) => {
     });
   }
 
-  // Check if the file is a DOCX file
   const fileExtension = path.extname(req.file.originalname).toLowerCase();
   if (fileExtension !== '.docx' && fileExtension !== '.doc') {
     console.error(`❌ Invalid file type: ${fileExtension}`);
@@ -228,83 +227,160 @@ BackendRoutes.post('/convert-docx', upload.single('file'), async (req, res) => {
   }
 
   try {
-    // Convert the uploaded DOCX to PDF
-    console.log(`🔄 Converting ${req.file.originalname} to PDF using LibreOffice...`);
-    console.log(`📁 File path: ${req.file.path}`);
-    console.log(`📁 File size: ${(fs.statSync(req.file.path).size / 1024).toFixed(2)} KB`);
-
-    // Verify file exists
-    if (!fs.existsSync(req.file.path)) {
-      console.error(`❌ File does not exist at path: ${req.file.path}`);
-      return res.status(500).json({
-        status: 'error',
-        message: 'Uploaded file not found on server'
-      });
-    }
-
+    // Check LibreOffice installation
     console.log('🔍 Checking for LibreOffice...');
-    const libreOfficePath = await checkLibreOffice().catch(err => {
-      console.error('❌ LibreOffice check failed:', err.message);
-      return null;
-    });
+    await checkLibreOffice();
 
-    if (libreOfficePath) {
-      console.log(`✅ LibreOffice found at: ${libreOfficePath}`);
-    } else {
-      console.log('⚠️ Using fallback conversion - LibreOffice not found');
+    // Convert the file
+    console.log(`🔄 Converting ${req.file.originalname} to PDF...`);
+    const pdfPath = await convertDocxToPdf(req.file.path);
+
+    if (!pdfPath || !fs.existsSync(pdfPath)) {
+      throw new Error('PDF conversion failed - output file not found');
     }
 
-    // Do the conversion
-    const result = await convertDocxToPdf(req.file.path);
-    console.log('✅ Conversion completed successfully:', result);
+    // Upload the converted PDF to Firebase Storage
+    console.log('📤 Uploading converted PDF to Firebase Storage...');
+    const pdfFileName = path.basename(pdfPath);
+    const storagePath = `uploads/${Date.now()}_${pdfFileName}`;
 
-    // Check if output file exists
-    if (!fs.existsSync(result.filePath)) {
-      console.error(`❌ Output file not found at: ${result.filePath}`);
-      return res.status(500).json({
-        status: 'error',
-        message: 'Conversion failed: output file not found'
-      });
-    }
+    // Create a reference to Firebase Storage
+    const pdfRef = storageRef(storage, storagePath);
 
-    console.log(`📝 PDF output size: ${(fs.statSync(result.filePath).size / 1024).toFixed(2)} KB`);
+    // Read the PDF file
+    const pdfBuffer = fs.readFileSync(pdfPath);
 
-    // Send the converted PDF file
-    console.log('📤 Sending converted PDF to client...');
-    res.download(result.filePath, req.file.originalname.replace(/\.(docx|doc)$/i, '.pdf'), (err) => {
-      if (err) {
-        console.error('❌ Error sending file:', err);
-      } else {
-        console.log('✅ File sent successfully');
+    // Upload to Firebase Storage
+    await uploadBytes(pdfRef, pdfBuffer, {
+      contentType: 'application/pdf',
+      customMetadata: {
+        originalName: req.file.originalname,
+        convertedFrom: 'docx'
       }
-
-      // Clean up temporary files after sending
-      cleanupTempFiles([req.file.path, result.filePath]);
     });
+
+    // Get the download URL
+    const pdfUrl = await getDownloadURL(pdfRef);
+
+    // Clean up temporary files
+    console.log('🧹 Cleaning up temporary files...');
+    await cleanupTempFiles(req.file.path, pdfPath);
+
+    // Return the Firebase Storage URL
+    res.json({
+      status: 'success',
+      message: 'File converted successfully',
+      pdfUrl
+    });
+
   } catch (error) {
     console.error('❌ Conversion error:', error);
-
-    // Determine the type of error for a more specific message
-    let errorMessage = `Failed to convert file: ${error.message}`;
-    let statusCode = 500;
-
-    if (error.message.includes('LibreOffice not found')) {
-      statusCode = 503; // Service Unavailable
-      errorMessage = 'LibreOffice is not installed on the server. Please install LibreOffice to enable DOCX to PDF conversion.';
-    } else if (error.message.includes('DOCX to PDF conversion failed')) {
-      statusCode = 500; // Internal Server Error
-      errorMessage = 'LibreOffice conversion failed. The document may be corrupted or incompatible.';
-    }
-
-    res.status(statusCode).json({
+    res.status(500).json({
       status: 'error',
-      message: errorMessage,
-      details: error.message
+      message: error.message || 'Failed to convert file'
     });
 
-    // Clean up the uploaded file on error
-    if (req.file && req.file.path && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
+    // Clean up on error
+    try {
+      await cleanupTempFiles(req.file.path);
+    } catch (cleanupError) {
+      console.error('Cleanup error:', cleanupError);
+    }
+  }
+});
+
+// Add a new Docker-based conversion endpoint
+BackendRoutes.post('/docker-convert-docx', upload.single('file'), async (req, res) => {
+  console.log('✅ Received Docker conversion request');
+
+  if (!req.file) {
+    console.error('❌ No file uploaded');
+    return res.status(400).json({
+      status: 'error',
+      message: 'No file uploaded'
+    });
+  }
+
+  const fileExtension = path.extname(req.file.originalname).toLowerCase();
+  if (fileExtension !== '.docx' && fileExtension !== '.doc') {
+    console.error(`❌ Invalid file type: ${fileExtension}`);
+    return res.status(400).json({
+      status: 'error',
+      message: 'Only DOCX and DOC files are supported'
+    });
+  }
+
+  try {
+    console.log(`🔄 Converting ${req.file.originalname} using Docker service...`);
+    console.log(`📁 File path: ${req.file.path}`);
+
+    // Create a form with the file to send to the Docker service
+    const form = new FormData();
+    form.append('document', fs.createReadStream(req.file.path));
+
+    // Send the file to the Docker service
+    const dockerResponse = await axios.post('http://localhost:8080/pdf', form, {
+      headers: {
+        ...form.getHeaders(),
+        'Accept': 'application/pdf'
+      },
+      responseType: 'arraybuffer' // Important to handle binary PDF data
+    });
+
+    // Convert the response to a Buffer
+    const pdfBuffer = Buffer.from(dockerResponse.data);
+
+    // Generate a unique filename for the PDF
+    const pdfFileName = `${Date.now()}_${path.basename(req.file.originalname, fileExtension)}.pdf`;
+    const pdfPath = path.join(path.dirname(req.file.path), pdfFileName);
+
+    // Save the PDF locally
+    fs.writeFileSync(pdfPath, pdfBuffer);
+
+    console.log(`✅ PDF conversion successful, saved to: ${pdfPath}`);
+
+    // Upload the converted PDF to Firebase Storage
+    console.log('📤 Uploading converted PDF to Firebase Storage...');
+    const storagePath = `uploads/${pdfFileName}`;
+
+    // Create a reference to Firebase Storage
+    const pdfRef = storageRef(storage, storagePath);
+
+    // Upload to Firebase Storage using uploadBytes instead of put
+    await uploadBytes(pdfRef, pdfBuffer, {
+      contentType: 'application/pdf',
+      customMetadata: {
+        originalName: req.file.originalname,
+        convertedFrom: 'docx',
+        convertedUsing: 'docker'
+      }
+    });
+
+    // Get the download URL
+    const pdfUrl = await getDownloadURL(pdfRef);
+
+    // Clean up temporary files
+    cleanupTempFiles(req.file.path, pdfPath);
+
+    // Return the Firebase Storage URL
+    res.json({
+      status: 'success',
+      message: 'File converted successfully using Docker service',
+      pdfUrl
+    });
+
+  } catch (error) {
+    console.error('❌ Docker conversion error:', error.message);
+    res.status(500).json({
+      status: 'error',
+      message: error.message || 'Failed to convert file using Docker service'
+    });
+
+    // Clean up on error
+    try {
+      cleanupTempFiles(req.file.path);
+    } catch (cleanupError) {
+      console.error('Cleanup error:', cleanupError);
     }
   }
 });

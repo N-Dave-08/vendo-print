@@ -711,268 +711,80 @@ const FileUpload = () => {
     }
   };
 
-  const uploadFileToFirebase = async (file) => {
-    if (!file) {
+  const handleFileChange = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    // Check if file type is allowed
+    if (!allowedTypes.includes(file.type) &&
+      !file.name.toLowerCase().endsWith('.docx') &&
+      !file.name.toLowerCase().endsWith('.doc')) {
+      alert('Unsupported file type. Please upload a PDF, DOCX, or common image format.');
       return;
     }
 
+    setFileToUpload(file);
     setUploadStatus("uploading");
+    setUploadProgress(0);
 
     try {
-      // Special handling for DOCX files to convert via server-side LibreOffice
-      if (file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-        file.name.toLowerCase().endsWith('.docx') || file.name.toLowerCase().endsWith('.doc')) {
-
-        console.log("DOCX file detected, converting using LibreOffice...");
+      // For DOCX files, use server-side conversion
+      if (file.name.toLowerCase().endsWith('.docx') || file.name.toLowerCase().endsWith('.doc')) {
         setConvertingDocx(true);
 
-        try {
-          // Convert DOCX to PDF using LibreOffice on the server
-          const conversionResult = await convertDocxWithLibreOffice(file);
+        // Create form data for the file
+        const formData = new FormData();
+        formData.append('file', file);
 
-          if (!conversionResult) {
-            console.error("DOCX conversion failed");
-            setUploadStatus("");
-            setConvertingDocx(false);
-            return;
-          }
+        // Use the Docker conversion service via our backend
+        const response = await fetch('http://192.168.1.19:5000/api/docker-convert-docx', {
+          method: 'POST',
+          body: formData,
+        });
 
-          const convertedFile = conversionResult.convertedFile;
-          const pageCount = conversionResult.pageCount;
+        if (!response.ok) {
+          throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
+        }
 
-          // Create a unique filename to avoid collisions
-          const timestamp = new Date().getTime();
-          const uniqueFileName = `${timestamp}_${convertedFile.name}`;
-          const storageRef = ref(storage, `uploads/${uniqueFileName}`);
+        const data = await response.json();
 
-          // Set metadata to ensure files are publicly readable
-          const metadata = {
-            contentType: 'application/pdf',
-            customMetadata: {
-              'public': 'true',
-              'pageCount': pageCount.toString(),
-              'fileName': file.name,
-              'originalType': file.type,
-              'isConverted': 'true'
-            }
-          };
-
-          // Upload the converted PDF
-          const uploadTask = uploadBytesResumable(storageRef, convertedFile, metadata);
-
-          uploadTask.on(
-            "state_changed",
-            (snapshot) => {
-              const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-              setUploadProgress(progress);
-              console.log('Upload progress:', progress);
-            },
-            (error) => {
-              console.error("Upload failed:", error);
-              setUploadStatus("");
-              setConvertingDocx(false);
-            },
-            async () => {
-              try {
-                const url = await getDownloadURL(uploadTask.snapshot.ref);
-                setFilePreviewUrl(url);
-                setUploadStatus("");
-                setConvertingDocx(false);
-
-                // Get the storage path from the reference
-                const storagePath = uploadTask.snapshot.ref.fullPath;
-
-                // Push file details to Firebase Realtime Database
-                const fileRef = push(dbRef(realtimeDb, "uploadedFiles"));
-
-                // Create file data with converted PDF info
-                const fileData = {
-                  fileName: file.name, // Keep original DOCX filename
-                  fileUrl: url,
-                  storagePath: storagePath, // Add storage path
-                  totalPages: pageCount,
-                  uploadedAt: new Date().toISOString(),
-                  uploadSource: "qr",
-                  fileType: 'application/pdf', // It's now a PDF
-                  originalType: file.type, // Store original type for reference
-                  isFallbackConversion: conversionResult.isFallbackConversion
-                };
-
-                console.log("Storing converted PDF file data in database:", fileData);
-                await set(fileRef, fileData);
-
-                // Navigate to printer page
-                navigate("/printer", {
-                  state: {
-                    fileName: file.name,
-                    fileUrl: url,
-                    storagePath: storagePath, // Include storage path in navigation state
-                    totalPages: pageCount,
-                    fileType: 'application/pdf',
-                    originalType: file.type,
-                    isFallbackConversion: conversionResult.isFallbackConversion
-                  }
-                });
-              } catch (error) {
-                console.error("Error storing file info in database:", error);
-                setUploadStatus("");
-                setConvertingDocx(false);
-              }
-            }
+        if (data.pdfUrl) {
+          console.log("Conversion successful, PDF URL:", data.pdfUrl);
+          // Use the converted PDF URL but keep the original DOCX filename
+          await handleUploadSuccess(
+            data.pdfUrl,                              // PDF URL 
+            file.name.replace(/\.(docx|doc)$/i, '.pdf'), // Converted PDF filename (not displayed)
+            'application/pdf',                        // File type is PDF
+            file.name                                 // Original DOCX filename to display
           );
-
-          return; // Exit early since we've handled everything
-        } catch (error) {
-          console.error("Error converting DOCX with LibreOffice:", error);
-          // If server-side conversion fails, we'll continue with the regular upload flow
-          alert("Server-side conversion failed. Please check if LibreOffice is installed on the server.");
-          setUploadStatus("");
-          setConvertingDocx(false);
-          return;
+        } else {
+          throw new Error('PDF conversion failed: No URL returned');
         }
+
+        setConvertingDocx(false);
+        return;
       }
 
-      // For non-DOCX files, continue with existing logic
-      // ... Keep the rest of the existing code ...
-      // ... existing file upload code remains unchanged ...
-
-      // Get page count for PDFs 
-      let pageCount = 1;
+      // Handle direct PDF uploads
       if (file.type === "application/pdf") {
-        try {
-          console.log("Detecting PDF page count...");
-          const pdfData = await file.arrayBuffer();
-          const pdfDoc = await PDFDocument.load(pdfData);
-          pageCount = pdfDoc.getPageCount();
-          console.log(`PDF page count detected: ${pageCount}`);
-        } catch (pdfError) {
-          console.error("Error detecting PDF page count:", pdfError);
-          pageCount = 21; // Fallback to default of 21 for this specific document
-        }
+        // Upload directly to Firebase
+        await uploadFileToFirebase(file);
+        return;
       }
 
-      // Create a unique filename to avoid collisions
-      const timestamp = new Date().getTime();
-      const uniqueFileName = `${timestamp}_${file.name}`;
-      const storageRef = ref(storage, `uploads/${uniqueFileName}`);
+      // Handle image uploads
+      if (file.type.startsWith('image/')) {
+        setTotalPages(1); // Images are just 1 page
+        await uploadFileToFirebase(file);
+        return;
+      }
 
-      // Set metadata to ensure files are publicly readable
-      const metadata = {
-        contentType: file.type,
-        customMetadata: {
-          'public': 'true',
-          'pageCount': pageCount.toString(),
-          'originalFileName': file.name,
-          'originalType': file.type
-        }
-      };
-
-      console.log(`Uploading file with ${pageCount} pages...`);
-      const uploadTask = uploadBytesResumable(storageRef, file, metadata);
-
-      uploadTask.on(
-        "state_changed",
-        (snapshot) => {
-          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-          setUploadProgress(progress);
-          console.log('Upload progress:', progress);
-        },
-        (error) => {
-          console.error("Upload failed:", error);
-          setUploadStatus("");
-          setFilePreviewUrl("");
-        },
-        async () => {
-          try {
-            const url = await getDownloadURL(uploadTask.snapshot.ref);
-            setFilePreviewUrl(url);
-            setUploadStatus("");
-
-            // Get the storage path from the reference
-            const storagePath = uploadTask.snapshot.ref.fullPath;
-
-            // Push file details to Firebase Realtime Database
-            const fileRef = push(dbRef(realtimeDb, "uploadedFiles"));
-
-            // Create file data with correct page count and storage path
-            const fileData = {
-              fileName: file.name,
-              fileUrl: url,
-              storagePath: storagePath, // Add storage path
-              totalPages: pageCount,
-              uploadedAt: new Date().toISOString(),
-              uploadSource: "qr",
-              fileType: file.type
-            };
-
-            console.log("Storing file data in database:", fileData);
-            await set(fileRef, fileData);
-
-            // Navigate to printer page after successful upload
-            navigate("/printer", {
-              state: {
-                fileName: file.name,
-                fileUrl: url,
-                storagePath: storagePath, // Include storage path in navigation state
-                totalPages: pageCount,
-                fileType: file.type
-              }
-            });
-          } catch (error) {
-            console.error("Error storing file info in database:", error);
-            setUploadStatus("");
-            setFilePreviewUrl("");
-          }
-        }
-      );
+      // Fallback for other file types
+      await uploadFileToFirebase(file);
     } catch (error) {
       console.error("Error processing file:", error);
       setUploadStatus("");
-      setFilePreviewUrl("");
-    }
-  };
-
-  const handleFileSelect = async (event) => {
-    const file = event.target.files[0];
-    if (!file) {
-      alert("No file selected!");
-      return;
-    }
-
-    // Set file type for images if not properly detected
-    if (file.name.startsWith('IMG_')) {
-      file.type = 'image/jpeg';
-    }
-
-    if (!allowedTypes.includes(file.type) && !isImageFile(file.type)) {
-      alert("Unsupported file type! Please upload PDF, DOCX, or image files (JPEG, PNG, GIF, WebP) only.");
-      return;
-    }
-    setFileToUpload(file);
-
-    // For DOCX files, we'll convert to PDF during upload, so just proceed
-    if (file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-      uploadFileToFirebase(file);
-    }
-    // For PDFs, get the page count
-    else if (file.type === "application/pdf") {
-      try {
-        console.log("Processing PDF file:", file.name);
-        const pdfData = await file.arrayBuffer();
-        const pdfDoc = await PDFDocument.load(pdfData);
-        const pageCount = pdfDoc.getPageCount();
-        console.log(`PDF has ${pageCount} pages`);
-        setTotalPages(pageCount);
-        uploadFileToFirebase(file);
-      } catch (error) {
-        console.error("Error processing PDF:", error);
-        // Still attempt to upload even if page counting fails
-        setTotalPages(21); // Set default to 21 for our specific document
-        uploadFileToFirebase(file);
-      }
-    } else {
-      setTotalPages(1); // Default for image files
-      uploadFileToFirebase(file);
+      alert(`Error: ${error.message}`);
     }
   };
 
@@ -996,7 +808,7 @@ const FileUpload = () => {
       const fileInput = document.createElement('input');
       fileInput.type = 'file';
       fileInput.files = e.dataTransfer.files;
-      handleFileSelect({ target: fileInput });
+      handleFileChange({ target: fileInput });
     }
   };
 
@@ -1041,6 +853,67 @@ const FileUpload = () => {
     return getFileIcon();
   };
 
+  // Add a helper function to handle successful uploads
+  const handleUploadSuccess = async (fileUrl, fileName, fileType, originalFileName = null) => {
+    setFilePreviewUrl(fileUrl);
+    setUploadStatus("");
+
+    // If this is a converted file but we want to keep the original name
+    const displayFileName = originalFileName || fileName;
+
+    try {
+      // Create a file entry in the database
+      const newFileRef = push(dbRef(realtimeDb, "uploadedFiles"));
+      await set(newFileRef, {
+        fileName: displayFileName, // Use the display filename (original DOCX name if provided)
+        fileUrl: fileUrl,
+        uploadedAt: new Date().toISOString(),
+        fileType: fileType,
+        totalPages: totalPages,
+        uploadSource: "qr",
+        status: "ready",
+        isConverted: !!originalFileName, // Flag to indicate it's a converted file
+        originalFormat: originalFileName ? "docx" : null // Store the original format if converted
+      });
+
+      console.log(`File uploaded successfully: ${displayFileName}`);
+
+      // Redirect to the QR page with the file details as query parameters
+      navigate(`/qr?name=${encodeURIComponent(displayFileName)}&url=${encodeURIComponent(fileUrl)}&pages=${totalPages}`);
+    } catch (error) {
+      console.error("Error finalizing upload:", error);
+      alert("Error finalizing upload. Please try again.");
+    }
+  };
+
+  // Existing uploadFileToFirebase function with progress tracking
+  const uploadFileToFirebase = async (file) => {
+    const timestamp = Date.now();
+    const storageRef = ref(storage, `uploads/${timestamp}_${file.name}`);
+
+    // Create upload task
+    const uploadTask = uploadBytesResumable(storageRef, file);
+
+    // Monitor upload progress
+    uploadTask.on(
+      "state_changed",
+      (snapshot) => {
+        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+        setUploadProgress(progress);
+      },
+      (error) => {
+        console.error("Upload error:", error);
+        setUploadStatus("");
+        alert(`Upload failed: ${error.message}`);
+      },
+      async () => {
+        // Upload complete
+        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+        await handleUploadSuccess(downloadURL, file.name, file.type);
+      }
+    );
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100">
       {/* Initial info modal */}
@@ -1082,7 +955,7 @@ const FileUpload = () => {
             type="file"
             accept=".pdf,.docx,.jpg,.jpeg,.png,.gif,.webp"
             className="hidden"
-            onChange={handleFileSelect}
+            onChange={handleFileChange}
             id="file-upload"
           />
           <label
@@ -1101,33 +974,37 @@ const FileUpload = () => {
           </label>
         </div>
 
+        {/* Status indicators */}
         {uploadStatus === "uploading" && (
-          <div className="mt-6">
-            {convertingDocx && (
-              <p className="text-center text-sm text-blue-600 mb-2">
-                Converting DOCX to PDF for better compatibility...
-              </p>
-            )}
+          <div className="w-full mt-4">
+            <div className="text-center text-gray-700 mb-2">
+              {convertingDocx ? 'Converting DOCX to PDF...' : 'Uploading file...'}
+            </div>
             <div className="w-full bg-gray-200 rounded-full h-2.5">
               <div
-                className="bg-primary h-2.5 rounded-full transition-all duration-300 ease-out"
+                className="bg-blue-600 h-2.5 rounded-full"
                 style={{ width: `${uploadProgress}%` }}
               ></div>
             </div>
-            <p className="text-center text-sm text-gray-600 mt-2">
-              {convertingDocx ? "Converting and uploading..." : `Uploading... ${Math.round(uploadProgress)}%`}
-            </p>
+            <div className="text-center text-sm text-gray-500 mt-1">
+              {uploadProgress}%
+            </div>
           </div>
         )}
 
         {fileToUpload && filePreviewUrl && (
           <div className="mt-6 p-4 bg-gray-50 rounded-lg">
             <div className="flex items-center space-x-4">
-              {getFilePreview()}
+              {/* Show the icon based on the original file type, not the converted file */}
+              {fileToUpload && fileToUpload.name.toLowerCase().endsWith('.docx') ?
+                <FontAwesomeIcon icon={faFileWord} className="text-blue-500 text-3xl" /> :
+                getFilePreview()
+              }
               <div className="flex-1">
                 <p className="font-medium text-gray-800 truncate">{fileToUpload.name}</p>
                 <p className="text-sm text-gray-500">
                   {!isImageFile(fileToUpload.type) && `Pages: ${totalPages} • `}{(fileToUpload.size / (1024 * 1024)).toFixed(2)} MB
+                  {convertingDocx && <span className="ml-1 text-blue-500">(Converted for printing)</span>}
                 </p>
                 <p className="text-xs text-green-600 mt-1">
                   Upload complete! Redirecting to printer page...
