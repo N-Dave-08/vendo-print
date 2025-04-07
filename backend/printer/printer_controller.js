@@ -2154,10 +2154,10 @@ const cleanupOldPrintScripts = () => {
     const now = Date.now();
     const ONE_HOUR = 60 * 60 * 1000;
     
-    // Find script files that are older than one hour
+    // Find script files and log files that are older than one hour
     const oldFiles = files.filter(filename => {
-      // Match print script files
-      if (!filename.match(/print_script_\d+\.ps1/)) return false;
+      // Match print script files and log files
+      if (!filename.match(/print_script_\d+\.ps1/) && !filename.match(/print_log_\d+\.txt/)) return false;
       
       try {
         const filePath = path.join(tempDir, filename);
@@ -2170,18 +2170,18 @@ const cleanupOldPrintScripts = () => {
     
     // Delete old files
     if (oldFiles.length > 0) {
-      console.log(`Cleaning up ${oldFiles.length} old print script files`);
+      console.log(`Cleaning up ${oldFiles.length} old print script and log files`);
       
       oldFiles.forEach(filename => {
         try {
           fs.unlinkSync(path.join(tempDir, filename));
         } catch (err) {
-          console.warn(`Could not delete old script file ${filename}: ${err.message}`);
+          console.warn(`Could not delete old file ${filename}: ${err.message}`);
         }
       });
     }
   } catch (err) {
-    console.error("Error cleaning up print script files:", err);
+    console.error("Error cleaning up print files:", err);
   }
 };
 
@@ -2189,287 +2189,205 @@ const cleanupOldPrintScripts = () => {
 setInterval(cleanupOldPrintScripts, 15 * 60 * 1000); // Every 15 minutes
 
 export const printPdfDirect = async (filePath, printerName, isColor = true) => {
-  // Run cleanup before starting a new print job
-  cleanupOldPrintScripts();
-  
-  // Generate a unique job key
-  const jobKey = `${filePath}-${printerName}-${isColor ? 'color' : 'bw'}`;
-  
-  // Check if this job is already active
-  if (activePdfPrintJobs.has(jobKey)) {
-    console.log(`PDF print job already active for ${jobKey}, preventing duplicate printing`);
-    return "Print job already in progress";
-  }
-  
-  // Mark this job as active
-  activePdfPrintJobs.add(jobKey);
-  console.log(`Starting PDF print job: ${jobKey}`);
-  
-  const platform = os.platform();
-  
-  if (platform !== 'win32') {
-    activePdfPrintJobs.delete(jobKey); // Remove if error
-    throw new Error('Direct PDF printing is only available on Windows');
-  }
-
-  // Create a temporary script file for reliable execution
-  const uniqueId = Date.now();
-  const scriptPath = path.join(path.dirname(filePath), `print_script_${uniqueId}.ps1`);
-  
-  let printScript = `
-# Print PDF Directly
-$ErrorActionPreference = "Stop"
-
-Write-Host "===== DIRECT PDF PRINTING SCRIPT ====="
-Write-Host "Printer: ${printerName}"
-Write-Host "File: ${filePath}"
-Write-Host "Color: ${isColor ? 'Yes' : 'No'}"
-
-# Check if file exists
-if (!(Test-Path "${filePath}")) {
-    Write-Error "File does not exist: ${filePath}"
-    exit 1
-}
-
-# Check printer exists
-try {
-    $printerObj = Get-Printer -Name "${printerName}" -ErrorAction Stop
-    Write-Host "Found printer: $($printerObj.Name) [Status: $($printerObj.PrinterStatus)]"
-} catch {
-    Write-Error "Printer not found: ${printerName}"
-    exit 1
-}
-
-# Get file info
-$file = Get-Item "${filePath}"
-Write-Host "File size: $($file.Length) bytes"
-
-# Set a flag to track if we've successfully printed
-$printSuccess = $false
-
-# Method 1: Use AcroRd32.exe if available (most reliable for PDFs)
-if (-not $printSuccess) {
-    try {
-        $acrobatPath = "C:\\Program Files (x86)\\Adobe\\Acrobat Reader DC\\Reader\\AcroRd32.exe"
-        if (Test-Path $acrobatPath) {
-            Write-Host "Using Adobe Reader for printing..."
-            & $acrobatPath /t "${filePath}" "${printerName}"
-            Write-Host "Print job submitted via Adobe Reader"
-            Start-Sleep -Seconds 2
-            $printSuccess = $true
-        }
-    } catch {
-        Write-Host "Adobe Reader print failed: $_"
-    }
-}
-
-# Method 2: Use the system print dialog ONLY if Method 1 failed
-if (-not $printSuccess) {
-    try {
-        Write-Host "Setting default printer to ${printerName}..."
-        $wshNetwork = New-Object -ComObject WScript.Network
-        $wshNetwork.SetDefaultPrinter("${printerName}")
-        
-        Write-Host "Starting direct print using Windows API..."
-        Add-Type -AssemblyName System.Windows.Forms
-        
-        # Create PDF printing logic using native Windows API
-        Add-Type -TypeDefinition @"
-        using System;
-        using System.Drawing;
-        using System.Drawing.Printing;
-        using System.IO;
-        using System.Windows.Forms;
-        using System.Runtime.InteropServices;
-
-        public class PDFPrinter
-        {
-            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
-            private class DOCINFOA
-            {
-                [MarshalAs(UnmanagedType.LPStr)]
-                public string pDocName;
-                [MarshalAs(UnmanagedType.LPStr)]
-                public string pOutputFile;
-                [MarshalAs(UnmanagedType.LPStr)]
-                public string pDataType;
-            }
-
-            [DllImport("winspool.Drv", EntryPoint = "OpenPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-            private static extern bool OpenPrinter([MarshalAs(UnmanagedType.LPStr)] string szPrinter, out IntPtr hPrinter, IntPtr pd);
-
-            [DllImport("winspool.Drv", EntryPoint = "ClosePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-            private static extern bool ClosePrinter(IntPtr hPrinter);
-
-            [DllImport("winspool.Drv", EntryPoint = "StartDocPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-            private static extern bool StartDocPrinter(IntPtr hPrinter, Int32 level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
-
-            [DllImport("winspool.Drv", EntryPoint = "EndDocPrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-            private static extern bool EndDocPrinter(IntPtr hPrinter);
-
-            [DllImport("winspool.Drv", EntryPoint = "StartPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-            private static extern bool StartPagePrinter(IntPtr hPrinter);
-
-            [DllImport("winspool.Drv", EntryPoint = "EndPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-            private static extern bool EndPagePrinter(IntPtr hPrinter);
-
-            [DllImport("winspool.Drv", EntryPoint = "WritePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-            private static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, Int32 dwCount, out Int32 dwWritten);
-
-            [DllImport("shell32.dll", CharSet = CharSet.Auto)]
-            private static extern bool ShellExecuteEx(ref SHELLEXECUTEINFO lpExecInfo);
-
-            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
-            private struct SHELLEXECUTEINFO
-            {
-                public int cbSize;
-                public uint fMask;
-                public IntPtr hwnd;
-                [MarshalAs(UnmanagedType.LPTStr)]
-                public string lpVerb;
-                [MarshalAs(UnmanagedType.LPTStr)]
-                public string lpFile;
-                [MarshalAs(UnmanagedType.LPTStr)]
-                public string lpParameters;
-                [MarshalAs(UnmanagedType.LPTStr)]
-                public string lpDirectory;
-                public int nShow;
-                public IntPtr hInstApp;
-                public IntPtr lpIDList;
-                [MarshalAs(UnmanagedType.LPTStr)]
-                public string lpClass;
-                public IntPtr hkeyClass;
-                public uint dwHotKey;
-                public IntPtr hIcon;
-                public IntPtr hProcess;
-            }
-
-            private const int SW_HIDE = 0;
-            private const uint SEE_MASK_NOCLOSEPROCESS = 0x00000040;
-            private const uint SEE_MASK_FLAG_NO_UI = 0x00000400;
-
-            public static bool PrintPDF(string filePath, string printerName)
-            {
-                try
-                {
-                    // First try ShellExecute with print verb (most reliable)
-                    SHELLEXECUTEINFO info = new SHELLEXECUTEINFO();
-                    info.cbSize = Marshal.SizeOf(info);
-                    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
-                    info.hwnd = IntPtr.Zero;
-                    info.lpVerb = "print";
-                    info.lpFile = filePath;
-                    info.lpParameters = "";
-                    info.lpDirectory = "";
-                    info.nShow = SW_HIDE;
-                    info.hInstApp = IntPtr.Zero;
-
-                    ShellExecuteEx(ref info);
-
-                    if (info.hProcess != IntPtr.Zero)
-                    {
-                        System.Threading.Thread.Sleep(5000);
-                        return true;
-                    }
-
-                    return false;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine("Error printing PDF: " + ex.Message);
-                    return false;
-                }
-            }
-        }
-"@
-
-        # Try to print using our custom class
-        $result = [PDFPrinter]::PrintPDF("${filePath}", "${printerName}")
-        if ($result) {
-            Write-Host "Print job submitted successfully using Windows API"
-            $printSuccess = $true
-        } else {
-            Write-Host "Direct Windows API printing did not return success"
-        }
-        
-        Start-Sleep -Seconds 3
-    } catch {
-        Write-Host "Method 2 failed: $_"
-    }
-}
-
-# Method 3: Fallback to basic printout ONLY if Methods 1 and 2 failed
-if (-not $printSuccess) {
-    try {
-        Write-Host "Attempting fallback print method..."
-        Start-Process -FilePath "${filePath}" -Verb Print -WindowStyle Hidden
-        Start-Sleep -Seconds 5
-        Write-Host "Fallback print method completed"
-        $printSuccess = $true
-    } catch {
-        Write-Host "All print methods failed: $_"
-        exit 1
-    }
-}
-
-# Check print queue one more time
-try {
-    $jobs = Get-PrintJob -PrinterName "${printerName}" -ErrorAction SilentlyContinue
-    # ... rest of existing script ...
-}
-
-# ... rest of existing code ...
-`;
-
-  fs.writeFileSync(scriptPath, printScript);
-  
   try {
-    console.log(`Created print script: ${scriptPath}`);
-    console.log(`Executing direct PDF print for file: ${filePath}`);
-    
-    const { stdout, stderr } = await new Promise((resolve, reject) => {
-      exec(`powershell.exe -ExecutionPolicy Bypass -File "${scriptPath}"`, 
-        { timeout: 30000 }, // 30 second timeout
-        (error, stdout, stderr) => {
-          if (error && !stdout.includes("Print job submitted")) {
-            reject(new Error(`Print failed: ${error.message}`));
-            return;
-          }
-          resolve({ stdout, stderr });
-        });
-    });
-    
-    console.log("Print script output:", stdout);
-    if (stderr) {
-      console.warn("Print script errors:", stderr);
+    console.log(`Attempting to print file ${filePath} to printer ${printerName}, color: ${isColor ? 'enabled' : 'disabled'}`);
+
+    // Check if file exists and has size
+    if (!fs.existsSync(filePath)) {
+      throw new Error('File does not exist');
     }
+
+    const stats = fs.statSync(filePath);
+    if (stats.size === 0) {
+      throw new Error('File is empty');
+    }
+
+    console.log(`File exists and has size ${stats.size} bytes`);
+
+    // Create a timestamp for unique file names
+    const timestamp = Date.now();
+    const tempDir = path.join(__dirname, 'temp');
     
-    return stdout;
-  } catch (error) {
-    console.error("Error executing PDF print script:", error);
-    throw error;
-  } finally {
-    // Clean up the script file
+    // Ensure temp directory exists
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    // Create PowerShell script for printing
+    const scriptPath = path.join(tempDir, `print_script_${timestamp}.ps1`);
+    const logPath = path.join(tempDir, `print_log_${timestamp}.txt`);
+    const tempPdfPath = path.join(tempDir, `grayscale_${timestamp}.pdf`);
+
+    // Find SumatraPDF executable
+    const possiblePaths = [
+      'C:\\Users\\63908\\AppData\\Local\\SumatraPDF\\SumatraPDF.exe',
+      'C:\\Users\\63908\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\SumatraPDF.exe',
+      path.join(process.env.APPDATA || '', 'Microsoft\\Windows\\Start Menu\\SumatraPDF.exe'),
+      'C:\\Program Files\\SumatraPDF\\SumatraPDF.exe',
+      'C:\\Program Files (x86)\\SumatraPDF\\SumatraPDF.exe',
+      path.join(process.env.LOCALAPPDATA || '', 'SumatraPDF\\SumatraPDF.exe'),
+      path.join(process.env.PROGRAMFILES || '', 'SumatraPDF\\SumatraPDF.exe'),
+      path.join(process.env['PROGRAMFILES(X86)'] || '', 'SumatraPDF\\SumatraPDF.exe')
+    ];
+
+    let sumatraPath = null;
+    for (const testPath of possiblePaths) {
+      if (fs.existsSync(testPath)) {
+        sumatraPath = testPath;
+        console.log('Found SumatraPDF at:', testPath);
+        break;
+      }
+    }
+
+    if (!sumatraPath) {
+      throw new Error('SumatraPDF not found. Please install SumatraPDF in a standard location.');
+    }
+
+    // Create PowerShell script content with proper PowerShell syntax
+    const psScript = [
+      '$ErrorActionPreference = "Stop"',
+      `Start-Transcript -Path "${logPath.replace(/\\/g, '\\\\')}"`,
+      'try {',
+      `    Write-Host "Starting print job with color mode: ${isColor ? 'Color' : 'Grayscale'}"`,
+      '',
+      '    # Save current default printer',
+      '    $network = New-Object -ComObject WScript.Network',
+      '    $originalPrinter = (Get-WmiObject -Query "SELECT * FROM Win32_Printer WHERE Default=$true").Name',
+      '    Write-Host "Original default printer: $originalPrinter"',
+      '',
+      '    # Set target printer as default',
+      `    Write-Host "Setting printer: ${printerName}"`,
+      `    $network.SetDefaultPrinter('${printerName}')`,
+      '',
+      `    $pdfToUse = "${filePath.replace(/\\/g, '\\\\')}"`,
+      `    $tempPdf = "${tempPdfPath.replace(/\\/g, '\\\\')}"`,
+      '',
+      `    if (-not ${isColor ? '$true' : '$false'}) {`,
+      '        Write-Host "Creating grayscale PDF version if possible"',
+      '        ',
+      '        # Check if Ghostscript is installed',
+      '        $gsPath = "C:\\Program Files\\gs\\gs*\\bin\\gswin64c.exe"',
+      '        $gsExe = Get-ChildItem -Path $gsPath -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName',
+      '        ',
+      '        if ($gsExe) {',
+      '            Write-Host "Using Ghostscript to convert PDF to grayscale: $gsExe"',
+      '            $gsArgs = @(',
+      '                "-sOutputFile=$tempPdf",',
+      '                "-sDEVICE=pdfwrite",',
+      '                "-sColorConversionStrategy=Gray",',
+      '                "-dProcessColorModel=/DeviceGray",',
+      '                "-dCompatibilityLevel=1.4",',
+      '                "-dNOPAUSE",',
+      '                "-dBATCH",',
+      '                $pdfToUse',
+      '            )',
+      '            ',
+      '            try {',
+      '                & $gsExe $gsArgs',
+      '                if (Test-Path $tempPdf) {',
+      '                    Write-Host "Grayscale PDF created successfully"',
+      '                    # Use the newly created grayscale PDF',
+      '                    $pdfToUse = $tempPdf',
+      '                } else {',
+      '                    Write-Host "Ghostscript did not create output file, falling back to original PDF"',
+      '                }',
+      '            } catch {',
+      '                Write-Host "Ghostscript conversion failed, falling back to original PDF: $_"',
+      '            }',
+      '        } else {',
+      '            Write-Host "Ghostscript not found, using original PDF with SumatraPDF monochrome settings"',
+      '        }',
+      '    }',
+      '',
+      '    # Print using SumatraPDF',
+      `    $sumatra = "${sumatraPath.replace(/\\/g, '\\\\')}"`,
+      '',
+      '    # Build arguments array',
+      '    $arguments = @()',
+      '    $arguments += "-print-to-default"',
+      '    $arguments += "-silent"',
+      '',
+      `    if (-not ${isColor ? '$true' : '$false'}) {`,
+      '        Write-Host "Adding monochrome settings to SumatraPDF"',
+      '        $arguments += "-monochrome"',
+      '    }',
+      '',
+      '    $arguments += $pdfToUse',
+      '',
+      '    Write-Host "Executing SumatraPDF with arguments: $($arguments -join \' \')"',
+      '',
+      '    # Execute SumatraPDF with arguments',
+      '    & $sumatra $arguments',
+      '',
+      '    # Wait for print job to be processed',
+      '    Start-Sleep -Seconds 3',
+      '',
+      '    # Restore original default printer',
+      '    if ($originalPrinter -and $originalPrinter -ne $null) {',
+      '        Write-Host "Restoring original default printer"',
+      '        $network.SetDefaultPrinter($originalPrinter)',
+      '    }',
+      '',
+      '    # Clean up temporary PDF',
+      '    if (Test-Path $tempPdf) {',
+      '        Remove-Item $tempPdf -Force',
+      '    }',
+      '',
+      '    Write-Host "Print job completed successfully"',
+      '} catch {',
+      '    Write-Error "Error during print job: $_"',
+      '    throw',
+      '} finally {',
+      '    Stop-Transcript',
+      '}'
+    ].join('\n');
+
+    // Write the PowerShell script
+    fs.writeFileSync(scriptPath, psScript);
+    console.log('Created print script at:', scriptPath);
+
     try {
-      if (fs.existsSync(scriptPath)) {
-        fs.unlinkSync(scriptPath);
+      // Execute the PowerShell script
+      const { stdout, stderr } = await execPromise(`powershell.exe -ExecutionPolicy Bypass -NoProfile -File "${scriptPath}"`);
+      
+      console.log('Print script output:', stdout);
+      if (stderr) {
+        console.warn('Print script warnings:', stderr);
       }
-    } catch (e) {
-      console.error("Error cleaning up script file:", e);
-    }
-    
-    // Remove from active jobs when done
-    activePdfPrintJobs.delete(fileKey);
-    
-    // Automatically clean up any active jobs older than 5 minutes to prevent leaks
-    const now = Date.now();
-    const FIVE_MINUTES = 5 * 60 * 1000;
-    for (const [key, timestamp] of activePdfPrintJobs.entries()) {
-      if (now - timestamp > FIVE_MINUTES) {
-        activePdfPrintJobs.delete(key);
-        console.log(`Removed stale PDF print job: ${key}`);
+
+      // Read the log file for additional debugging
+      if (fs.existsSync(logPath)) {
+        const log = fs.readFileSync(logPath, 'utf8');
+        console.log('Print log contents:', log);
+      }
+
+      return "Print command sent to printer";
+    } catch (printError) {
+      // Read the log file for error details
+      let errorDetails = printError.message;
+      if (fs.existsSync(logPath)) {
+        try {
+          const log = fs.readFileSync(logPath, 'utf8');
+          errorDetails += `\nLog contents:\n${log}`;
+        } catch (logError) {
+          console.warn('Could not read log file:', logError);
+        }
+      }
+      throw new Error(`Failed to print: ${errorDetails}`);
+    } finally {
+      // Clean up temporary files
+      try {
+        if (fs.existsSync(scriptPath)) fs.unlinkSync(scriptPath);
+        if (fs.existsSync(logPath)) fs.unlinkSync(logPath);
+        if (fs.existsSync(tempPdfPath)) fs.unlinkSync(tempPdfPath);
+      } catch (cleanupError) {
+        console.warn('Could not clean up temporary files:', cleanupError);
       }
     }
+  } catch (error) {
+    console.error('Print error:', error);
+    throw error;
   }
 };
+
 

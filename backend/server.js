@@ -111,6 +111,7 @@ server.timeout = 300000; // 5 minutes in milliseconds
 (async () => {
   try {
     await initUsbDetectionService(server);
+    // Keep this log since it's useful to know when the service is initialized
     console.log("USB detection service started");
   } catch (error) {
     console.error("Error starting USB detection service:", error);
@@ -123,7 +124,8 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📄 API endpoint: http://localhost:${PORT}/api`);
   console.log(`⚙️ Server timeout set to ${server.timeout / 1000} seconds`);
-  console.log(`📀 USB detection active - WebSocket: ws://localhost:${PORT}`);
+  // Remove detailed WebSocket logging
+  // console.log(`📀 USB detection active - WebSocket: ws://localhost:${PORT}`);
 });
 
 

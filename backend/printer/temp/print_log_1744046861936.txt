@@ -1,0 +1,22 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20250408012742
+Username: DAVE\63908
+RunAs User: DAVE\63908
+Configuration Name: 
+Machine: DAVE (Microsoft Windows NT 10.0.26100.0)
+Host Application: powershell.exe -ExecutionPolicy Bypass -File D:\projects\vendo-print\vendo-print\backend\printer\temp\print_script_1744046861936.ps1
+Process ID: 20824
+PSVersion: 5.1.26100.2161
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.2161
+BuildVersion: 10.0.26100.2161
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+Transcript started, output file is D:\\projects\\vendo-print\\vendo-print\\backend\\printer\\temp\\print_log_1744046861936.txt
+Starting print job with color mode: Black and White
+Original default printer: EPSON L3210 Series
+Setting printer: EPSON L3210 Series

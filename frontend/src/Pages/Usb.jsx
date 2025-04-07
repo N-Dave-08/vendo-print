@@ -35,7 +35,6 @@ const Usb = () => {
   const [isColor, setIsColor] = useState(false);
   const [orientation, setOrientation] = useState("portrait");
   const [totalPages, setTotalPages] = useState(1);
-  const [isSmartPriceEnabled, setIsSmartPriceEnabled] = useState(false);
   const [calculatedPrice, setCalculatedPrice] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [availableCoins, setAvailableCoins] = useState(0);
@@ -712,7 +711,7 @@ const Usb = () => {
       // Show loading indicator
       setIsLoading(true);
       setPrintProgress(10);
-      setPrintStatus("Processing file from USB drive...");
+      setPrintStatus("Reading file from USB drive...");
 
       // Create a File object from the path
       const response = await fetch(`http://localhost:5000/api/read-file?path=${encodeURIComponent(file.path)}`);
@@ -721,9 +720,15 @@ const Usb = () => {
         throw new Error('Failed to read file from USB drive');
       }
       
+      setPrintProgress(30);
+      setPrintStatus("Processing file...");
+      
       const fileBlob = await response.blob();
       const fileName = file.name;
       const fileObj = new File([fileBlob], fileName, { type: fileBlob.type });
+      
+      setPrintProgress(50);
+      setPrintStatus("Preparing file for printing...");
       
       // Now process the file as if it was selected via input
       await processSelectedFile(fileObj);
@@ -733,6 +738,7 @@ const Usb = () => {
       setIsLoading(false);
       setPrintStatus("Error reading file from USB. Please try again.");
       setPrintProgress(0);
+      alert(`Error: ${error.message}`);
     }
   };
   
@@ -962,6 +968,10 @@ const Usb = () => {
 
   // Update the handlePrint function to use our custom settings and send them to the backend
   const handlePrint = async () => {
+
+    // Immediately redirect to printer page
+    navigate('/printer');
+
     if (!fileToUpload) {
       alert("Please select a file to print first.");
       return;
@@ -972,14 +982,7 @@ const Usb = () => {
       return;
     }
 
-    setIsLoading(true);
-    setPrintStatus("Initializing print job...");
-    setPrintProgress(10);
-
     if (availableCoins < calculatedPrice) {
-      setIsLoading(false);
-      setPrintStatus("");
-      setPrintProgress(0);
       alert(`Insufficient coins. Please insert ${calculatedPrice - availableCoins} more coins.`);
       return;
     }
@@ -999,18 +1002,21 @@ const Usb = () => {
         fileUrl: filePreviewUrl,
         printerName: selectedPrinter,
         copies: copies,
-        selectedSize,
-        paperSize: "letter", // Always use letter size
-        scale: "fit-to-page", // Always use fit-to-page
+        paperSize: "Short Bond",  // Always use Short Bond
+        paperWidth: 8.5,          // Short Bond width in inches
+        paperHeight: 11,          // Short Bond height in inches
         isColor,
         orientation,
         totalPages,
         price: calculatedPrice,
-        progress: 5, // Start with 5% right away
+        progress: 5,
         printStatus: "Preparing print job...",
         status: "Processing",
         fileType: fileExtension,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        colorAnalysis: colorAnalysis,
+        hasColorContent: colorAnalysis?.hasColoredPages || false,
+        colorPageCount: colorAnalysis?.coloredPages?.length || 0
       });
 
       // Update coins immediately
@@ -1020,82 +1026,30 @@ const Usb = () => {
       });
       setAvailableCoins(updatedCoins);
 
-      // Immediately redirect to printer page
-      navigate('/printer');
-
-      // Progress simulation steps for background updates
-      const progressSteps = [
-        { progress: 15, status: "Processing document...", delay: 800 },
-        { progress: 30, status: "Configuring printer settings...", delay: 1500 },
-        { progress: 45, status: "Converting document format...", delay: 2200 },
-        { progress: 60, status: "Connecting to printer...", delay: 3000 },
-        { progress: 75, status: "Sending to printer...", delay: 3800 },
-        { progress: 85, status: "Printing in progress...", delay: 4500 },
-        { progress: 95, status: "Finishing print job...", delay: 5200 },
-      ];
-
-      // Start updating progress in the background
-      for (const step of progressSteps) {
-        setTimeout(() => {
-          update(printJobsRef, {
-            progress: step.progress,
-            printStatus: step.status
-          });
-        }, step.delay);
-      }
-
-      // Continue with API call in the background
-      const printJob = {
-        jobId: printJobId,
-        printJobId: printJobId,
-        fileName: fileName,
+      // Send print request to backend
+      const response = await axios.post('http://localhost:5000/api/print', {
         fileUrl: filePreviewUrl,
+        fileName: fileName,
         printerName: selectedPrinter,
         copies: copies,
-        selectedSize,
-        isColor,
-        orientation,
-        totalPages,
-        paperSize: "letter", // Set default paper size to letter
-        scale: "fit-to-page" // Set default scale to fit-to-page
-      };
+        isColor: isColor,
+        hasColorContent: colorAnalysis?.hasColoredPages || false,
+        colorPageCount: colorAnalysis?.coloredPages?.length || 0,
+        orientation: orientation,
+        selectedSize: "Short Bond",
+        printJobId: printJobId,
+        jobId: printJobId,
+        totalPages: totalPages,
+        price: calculatedPrice
+      });
 
-      // Make API call in the background
-      fetch('http://localhost:5000/api/print', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(printJob)
-      })
-        .then(response => {
-          if (!response.ok) {
-            throw new Error(`Print failed. Server returned ${response.status}`);
-          }
-          return response.json();
-        })
-        .then(data => {
-          // Update the print job with success status
-          update(printJobsRef, {
-            progress: 100,
-            printStatus: "Print job completed",
-            status: "Done"
-          });
-        })
-        .catch(error => {
-          console.error("Error in background print job:", error);
-          // Update the print job with error status
-          update(printJobsRef, {
-            progress: 0,
-            printStatus: `Error: ${error.message}`,
-            status: "Error"
-          });
-        });
+      if (response.data.status === 'error') {
+        throw new Error(response.data.error || 'Failed to print document');
+      }
 
     } catch (error) {
-      console.error("❌ Error printing document:", error);
+      console.error("Error printing document:", error);
       alert(`Error printing document: ${error.message}`);
-      setIsLoading(false);
     }
   };
 
@@ -1109,14 +1063,17 @@ const Usb = () => {
         fileUrl: filePreviewUrl,
         printerName: selectedPrinter,
         copies: copies,
-        paperSize: "letter", // Always use letter size
-        scale: "fit-to-page", // Always use fit-to-page
+        paperSize: "Short Bond",  // Always use Short Bond
+        paperWidth: 8.5,          // Short Bond width in inches
+        paperHeight: 11,          // Short Bond height in inches
+        scale: "fit",             // Fit to page
         isColor: isColor,
         orientation: orientation,
         totalPages: totalPages,
         finalPrice: calculatedPrice,
         timestamp: new Date().toISOString(),
-        status: "Pending"
+        status: "Pending",
+        colorAnalysis: colorAnalysis
       });
 
       // Deduct coins
@@ -1176,14 +1133,18 @@ const Usb = () => {
         storagePath: storagePath,
         printerName: selectedPrinter || "",
         copies: copies,
+        paperSize: "Short Bond",  // Always use Short Bond
+        paperWidth: 8.5,          // Short Bond width in inches
+        paperHeight: 11,          // Short Bond height in inches
+        scale: "fit",             // Fit to page
         isColor: isColor,
         orientation: orientation,
-        selectedSize: selectedSize,
         totalPages: pageCount,
         price: calculatedPrice,
         timestamp: new Date().toISOString(),
         status: "Ready",
-        progress: 0
+        progress: 0,
+        colorAnalysis: colorAnalysis
       });
 
     } catch (error) {
@@ -1204,7 +1165,6 @@ const Usb = () => {
     setIsColor(false);
     setSelectedSize("Short Bond");
     setOrientation("portrait");
-    setIsSmartPriceEnabled(false);
     setCalculatedPrice(0);
     setSelectedPrinter("");
     setPrinterCapabilities(null);
@@ -1254,8 +1214,6 @@ const Usb = () => {
                 setOrientation={setOrientation}
                 filePreviewUrl={filePreviewUrl}
                 totalPages={totalPages}
-                isSmartPriceEnabled={isSmartPriceEnabled}
-                setIsSmartPriceEnabled={setIsSmartPriceEnabled}
                 calculatedPrice={calculatedPrice}
                 setCalculatedPrice={setCalculatedPrice}
                 colorAnalysis={colorAnalysis}
@@ -1279,7 +1237,25 @@ const Usb = () => {
                 <h2 className="card-title text-base text-primary mb-2">Document Preview</h2>
                 
                 <div className="flex-1 bg-base-200 rounded-lg flex flex-col overflow-hidden">
-                  {filePreviewUrl ? (
+                  {isLoading ? (
+                    <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+                      <div className="loading loading-spinner loading-lg text-primary mb-4"></div>
+                      <p className="text-base-content/70">{printStatus}</p>
+                      {printProgress > 0 && (
+                        <div className="w-full max-w-xs mt-4">
+                          <div className="flex justify-between text-xs text-base-content/50 mb-1">
+                            <span>Progress</span>
+                            <span>{printProgress}%</span>
+                          </div>
+                          <progress 
+                            className="progress progress-primary w-full" 
+                            value={printProgress} 
+                            max="100"
+                          ></progress>
+                        </div>
+                      )}
+                    </div>
+                  ) : filePreviewUrl ? (
                     <div className="relative w-full h-full flex flex-col">
                       <div className="absolute top-2 right-2 z-10">
                         <button

@@ -6,8 +6,6 @@ const SmartPriceToggle = ({
   copies = 1,
   totalPages = 1,
   setTotalPages,
-  isSmartPriceEnabled,
-  setIsSmartPriceEnabled,
   calculatedPrice,
   setCalculatedPrice,
   selectedPageOption = "All",
@@ -16,14 +14,10 @@ const SmartPriceToggle = ({
   setCustomPageRange,
   filePreviewUrl,
   onChange,
-  onToggle,
-  isEnabled,
   colorAnalysis = null
 }) => {
   const [localPrice, setLocalPrice] = useState(0);
   const [showTooltip, setShowTooltip] = useState(false);
-
-  const enabled = isEnabled !== undefined ? isEnabled : isSmartPriceEnabled;
 
   useEffect(() => {
     // Base price calculation
@@ -61,11 +55,6 @@ const SmartPriceToggle = ({
 
       // Multiply by number of copies
       totalCost *= copies;
-
-      // Apply smart pricing discount if enabled
-      if (enabled) {
-        totalCost = Math.round(totalCost * 0.85);
-      }
     }
 
     // Update local price state
@@ -80,35 +69,16 @@ const SmartPriceToggle = ({
     if (typeof onChange === 'function') {
       onChange(totalCost);
     }
-  }, [isColor, copies, totalPages, selectedPageOption, customPageRange, filePreviewUrl, setCalculatedPrice, onChange, enabled, colorAnalysis]);
+  }, [isColor, copies, totalPages, selectedPageOption, customPageRange, filePreviewUrl, setCalculatedPrice, onChange, colorAnalysis]);
 
   // Use either the parent's calculatedPrice or the local price
   const displayPrice = calculatedPrice !== undefined ? calculatedPrice : localPrice;
-
-  const handleToggleChange = (e) => {
-    if (typeof setIsSmartPriceEnabled === 'function') {
-      setIsSmartPriceEnabled(e.target.checked);
-    }
-    
-    if (typeof onToggle === 'function') {
-      onToggle(e.target.checked);
-    }
-  };
 
   return (
     <div>
       <div className="flex items-center justify-between">
         <div className="flex items-center">
-          <label className="cursor-pointer label justify-start gap-2 items-center">
-            <input 
-              type="checkbox" 
-              className="toggle toggle-primary toggle-sm" 
-              checked={enabled}
-              onChange={handleToggleChange}
-            />
-            <span className="label-text">Smart Price</span>
-          </label>
-          
+          <h3 className="text-base font-medium">Smart Price</h3>
           <div className="relative ml-1">
             <button 
               className="w-5 h-5 rounded-full bg-gray-200 text-gray-600 font-bold flex items-center justify-center text-xs"
@@ -120,7 +90,7 @@ const SmartPriceToggle = ({
             
             {showTooltip && (
               <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-64 p-2 bg-gray-800 text-white text-xs rounded shadow-lg z-10">
-                Smart Price automatically calculates the cost based on your current print settings and applies a 15% discount.
+                Smart Price automatically calculates the cost based on your print settings and color content.
                 <div className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-1/2 rotate-45 w-2 h-2 bg-gray-800"></div>
               </div>
             )}
@@ -131,6 +101,17 @@ const SmartPriceToggle = ({
           <span className="text-sm font-normal mr-1">₱</span>
           {displayPrice.toFixed(2)}
         </div>
+      </div>
+
+      {/* Paper Size Display */}
+      <div className="mt-2 bg-base-200 rounded-lg p-2 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <svg className="w-4 h-4 text-base-content/70" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+          </svg>
+          <span className="text-sm text-base-content/70">Paper Size:</span>
+        </div>
+        <span className="text-sm font-medium">Short Bond (8.5" x 11")</span>
       </div>
       
       <div className="mt-2 text-xs text-gray-500">
@@ -154,6 +135,10 @@ const SmartPriceToggle = ({
                 <span className="font-medium">₱{isColor && page.hasColor ? '12.00' : '10.00'}</span>
               </div>
             ))}
+          </div>
+          <div className="mt-2 text-sm font-medium text-success flex justify-between">
+            <span>Total:</span>
+            <span>₱{displayPrice.toFixed(2)}</span>
           </div>
         </div>
       )}

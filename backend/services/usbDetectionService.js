@@ -90,7 +90,8 @@ async function detectUsbDrives() {
 // Windows USB drive detection
 function detectWindowsUsbDrives() {
   return new Promise((resolve, reject) => {
-    console.log('Windows USB detection starting...');
+    // Suppress detailed log
+    // console.log('Windows USB detection starting...');
     
     // Try multiple command variants for better reliability
     const attempts = [
@@ -110,13 +111,14 @@ function detectWindowsUsbDrives() {
     function tryNextCommand(index) {
       if (index >= attempts.length) {
         // All attempts failed, return empty result
-        console.log('All USB detection methods failed');
+        console.error('All USB detection methods failed');
         resolve([]);
         return;
       }
       
       const attempt = attempts[index];
-      console.log(`Executing PowerShell command (${attempt.name}):`, attempt.cmd);
+      // Suppress detailed log
+      // console.log(`Executing PowerShell command (${attempt.name}):`, attempt.cmd);
       
       exec(`powershell.exe -Command "${attempt.cmd}"`, (error, stdout, stderr) => {
         if (error) {
@@ -127,21 +129,24 @@ function detectWindowsUsbDrives() {
         }
 
         // Extract drive letters from the output (e.g., "E:", "F:")
-        console.log(`Raw PowerShell output (${attempt.name}):`);
-        console.log(stdout);
+        // Suppress detailed log
+        // console.log(`Raw PowerShell output (${attempt.name}):`);
+        // console.log(stdout);
         
         const drivesRaw = stdout.trim();
         const driveLetterMatches = drivesRaw.match(/([A-Z]:)/g);
         const driveLetters = driveLetterMatches || [];
         
         if (driveLetters.length === 0) {
-          console.log(`No removable drives detected from ${attempt.name}`);
+          // Suppress detailed log
+          // console.log(`No removable drives detected from ${attempt.name}`);
           // Try next method
           tryNextCommand(index + 1);
           return;
         }
         
-        console.log('Detected drive letters:', driveLetters);
+        // Suppress detailed log
+        // console.log('Detected drive letters:', driveLetters);
         
         // For drives that didn't have volume info in the first query, get additional details
         // This is done to improve drive display names
@@ -178,7 +183,8 @@ function detectWindowsUsbDrives() {
               };
             });
             
-            console.log(`Detected ${drives.length} USB drives: ${drives.map(d => d.path).join(', ')}`);
+            // More concise log message
+            // console.log(`Detected ${drives.length} USB drives: ${drives.map(d => d.path).join(', ')}`);
             resolve(drives);
           });
         } else {
@@ -335,7 +341,8 @@ async function checkForUsbDrives() {
         const state = driveDetectionState.get(drivePath) || { missCount: 0, lastSeen: 0 };
         const newMissCount = state.missCount + 1;
         
-        console.log(`USB drive ${drivePath} not detected in scan (miss ${newMissCount}/${DISCONNECT_THRESHOLD})`);
+        // Suppress detailed log
+        // console.log(`USB drive ${drivePath} not detected in scan (miss ${newMissCount}/${DISCONNECT_THRESHOLD})`);
         
         driveDetectionState.set(drivePath, {
           ...state,
@@ -381,13 +388,16 @@ export async function initUsbDetectionService(server) {
     // Check which API version is available
     let WebSocketServer;
     if (ws.WebSocketServer) {
-      console.log('Using WebSocketServer from ws module');
+      // Suppress detailed log
+      // console.log('Using WebSocketServer from ws module');
       WebSocketServer = ws.WebSocketServer;
     } else if (ws.default && ws.default.Server) {
-      console.log('Using Server from ws.default');
+      // Suppress detailed log
+      // console.log('Using Server from ws.default');
       WebSocketServer = ws.default.Server;
     } else if (ws.Server) {
-      console.log('Using Server directly from ws module');
+      // Suppress detailed log
+      // console.log('Using Server directly from ws module');
       WebSocketServer = ws.Server;
     } else {
       throw new Error('Could not find WebSocketServer in the ws module. Available properties: ' + Object.keys(ws).join(', '));
@@ -404,7 +414,8 @@ export async function initUsbDetectionService(server) {
     // Handle WebSocket connections
     wss.on('connection', (ws, req) => {
       const clientIp = req.socket.remoteAddress;
-      console.log(`New client connected to USB detection service from ${clientIp}`);
+      // Suppress detailed log
+      // console.log(`New client connected to USB detection service from ${clientIp}`);
       wsClients.add(ws);
       
       // Send currently connected USB drives
@@ -422,19 +433,22 @@ export async function initUsbDetectionService(server) {
       // Handle client messages
       ws.on('message', (message) => {
         try {
-          console.log(`Received message from client: ${message.toString()}`);
+          // Suppress detailed log
+          // console.log(`Received message from client: ${message.toString()}`);
           const data = JSON.parse(message.toString());
           
           if (data.type === 'ping') {
             // Reply with pong to keep connection alive
             try {
               ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
-              console.log('Sent pong response');
+              // Suppress detailed log
+              // console.log('Sent pong response');
             } catch (error) {
               console.error('Error sending pong response:', error);
             }
           } else {
-            console.log(`Received unknown message type: ${data.type}`);
+            // Suppress detailed log
+            // console.log(`Received unknown message type: ${data.type}`);
             // Send acknowledgment for other message types
             try {
               ws.send(JSON.stringify({ 
@@ -464,7 +478,8 @@ export async function initUsbDetectionService(server) {
       // Handle client disconnection
       ws.on('close', (code, reason) => {
         wsClients.delete(ws);
-        console.log(`Client disconnected from USB detection service: ${code} ${reason || ''}`);
+        // Suppress detailed log
+        // console.log(`Client disconnected from USB detection service: ${code} ${reason || ''}`);
       });
       
       // Handle errors
