@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from "react-router-dom";
 
 import { X, Printer as PrinterIcon, Usb, QrCode, Info, Clock, Trash2 } from "lucide-react";
@@ -21,6 +21,10 @@ const Printer = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isClearing, setIsClearing] = useState(false);
   const [processingPendingJob, setProcessingPendingJob] = useState(false);
+  // State to keep track of completed jobs and when they reached completion
+  const [completedJobs, setCompletedJobs] = useState({});
+  // Ref to store the previous job data for comparison to detect newly completed jobs
+  const prevJobsRef = useRef({});
 
   // Process any pending print job from sessionStorage
   useEffect(() => {
@@ -33,6 +37,26 @@ const Printer = () => {
         try {
           // Parse the stored print job data
           const printData = JSON.parse(pendingJobData);
+          
+          // Check for required fields to prevent processing invalid data
+          if (!printData.fileName || !printData.fileUrl || !printData.printerName) {
+            console.error("Invalid pending print job data - missing required fields");
+            sessionStorage.removeItem('pendingPrintJob');
+            setProcessingPendingJob(false);
+            return;
+          }
+          
+          // Check if the data is stale (more than 5 minutes old)
+          const timestamp = printData.timestamp || Date.now();
+          const currentTime = Date.now();
+          const FIVE_MINUTES = 5 * 60 * 1000;
+          
+          if (currentTime - timestamp > FIVE_MINUTES) {
+            console.log("Pending print job is stale (over 5 minutes old), removing");
+            sessionStorage.removeItem('pendingPrintJob');
+            setProcessingPendingJob(false);
+            return;
+          }
           
           // First check if we already have a recent job with this filename to prevent duplicates
           const printJobsRef = dbRef(realtimeDb, "printJobs");
@@ -280,8 +304,22 @@ const Printer = () => {
         
         // Filter active and non-stale jobs
         const filteredJobs = jobsArray.filter(job => {
-          // Include only pending, processing, printing jobs
+          // Include both active jobs AND completed jobs that have just finished
+          const TEN_SECONDS = 10 * 1000; // 10 seconds for auto-removal
           const isActive = ["pending", "processing", "printing"].includes(job.status);
+          
+          // Keep completed jobs visible for exactly 10 seconds, using job.updatedAt or a fallback
+          const isRecentlyCompleted = job.status === "completed" && 
+                                     ((job.updatedAt && (currentTime - job.updatedAt < TEN_SECONDS)) ||
+                                     // Fallback if updatedAt not present - use progress timestamp or creation time
+                                     (job.progressTimestamp && (currentTime - job.progressTimestamp < TEN_SECONDS)) ||
+                                     (job.createdAt && (currentTime - job.createdAt < 30 * 1000))); // fallback with 30s
+          
+          // Treat jobs with progress 100 that aren't marked completed the same as completed jobs
+          const isCompletedProgress = job.progress && job.progress >= 100 &&
+                                    ((job.progressTimestamp && (currentTime - job.progressTimestamp < TEN_SECONDS)) ||
+                                     (job.updatedAt && (currentTime - job.updatedAt < TEN_SECONDS)) ||
+                                     (job.createdAt && (currentTime - job.createdAt < 30 * 1000))); // fallback with 30s
           
           // Remove jobs that have been stuck at the same progress for more than 1 hour
           const isStale = job.createdAt && (currentTime - job.createdAt > ONE_HOUR) && job.progress <= 5;
@@ -289,7 +327,7 @@ const Printer = () => {
           // Filter out jobs with missing filenames
           const hasValidFilename = job.fileName && job.fileName.trim() !== "";
           
-          return isActive && !isStale && hasValidFilename;
+          return (isActive || isRecentlyCompleted || isCompletedProgress) && !isStale && hasValidFilename;
         })
         // Sort by creation time (newest first)
         .sort((a, b) => b.createdAt - a.createdAt);
@@ -307,6 +345,50 @@ const Printer = () => {
         // Convert map values to array for the final list
         const uniqueJobs = Array.from(filenameJobMap.values());
         
+        // Check for newly completed jobs that reached 100% progress or completed status
+        const prevJobs = prevJobsRef.current;
+        const newCompletedJobs = { ...completedJobs };
+        
+        uniqueJobs.forEach(job => {
+          const jobId = job.id;
+          const isCompleted = job.status === "completed" || (job.progress >= 100);
+          
+          // Determine if this job was previously not completed but now is
+          const prevJob = prevJobs[jobId];
+          const wasNotCompletedBefore = prevJob && 
+                                       !(prevJob.status === "completed" || prevJob.progress >= 100);
+          
+          // If the job just completed, mark its completion time
+          if (isCompleted && (wasNotCompletedBefore || !prevJob) && !newCompletedJobs[jobId]) {
+            console.log(`Job ${jobId} (${job.fileName}) just completed, scheduling removal in 10 seconds`);
+            newCompletedJobs[jobId] = {
+              completedAt: Date.now(),
+              fileName: job.fileName
+            };
+          }
+          
+          // Also check for jobs that might have been manually updated to 100% progress
+          if (isCompleted && !newCompletedJobs[jobId]) {
+            console.log(`Detected completed job ${jobId} (${job.fileName}), scheduling removal in 10 seconds`);
+            newCompletedJobs[jobId] = {
+              completedAt: Date.now(),
+              fileName: job.fileName
+            };
+          }
+        });
+        
+        // Update completed jobs state
+        if (Object.keys(newCompletedJobs).length !== Object.keys(completedJobs).length) {
+          setCompletedJobs(newCompletedJobs);
+        }
+        
+        // Store current jobs for next comparison
+        const jobsMap = {};
+        uniqueJobs.forEach(job => {
+          jobsMap[job.id] = job;
+        });
+        prevJobsRef.current = jobsMap;
+        
         setPrintJobs(uniqueJobs);
       } else {
         setPrintJobs([]);
@@ -314,12 +396,121 @@ const Printer = () => {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [completedJobs]);
+
+  // Effect to check for completed jobs that need to be removed after 10 seconds
+  useEffect(() => {
+    if (Object.keys(completedJobs).length === 0) return;
+    
+    const TEN_SECONDS = 10 * 1000;
+    
+    // Set up interval to check completed jobs every second
+    const checkInterval = setInterval(() => {
+      const currentTime = Date.now();
+      const jobsToRemove = [];
+      
+      // Check for jobs that have been completed for more than 10 seconds
+      Object.entries(completedJobs).forEach(([jobId, jobData]) => {
+        if (currentTime - jobData.completedAt >= TEN_SECONDS) {
+          console.log(`Auto-removing completed job ${jobId} (${jobData.fileName}) after 10 seconds`);
+          jobsToRemove.push(jobId);
+        }
+      });
+      
+      // Process each job for removal
+      if (jobsToRemove.length > 0) {
+        // Create a batch of removal promises
+        const removePromises = jobsToRemove.map(jobId => handleRemoveJob(jobId));
+        
+        // After all jobs are removed, update the completedJobs state
+        Promise.all(removePromises)
+          .then(() => {
+            setCompletedJobs(prev => {
+              const updated = { ...prev };
+              jobsToRemove.forEach(jobId => {
+                delete updated[jobId];
+              });
+              return updated;
+            });
+          })
+          .catch(error => {
+            console.error("Error in auto-removal process:", error);
+          });
+      }
+    }, 1000);
+    
+    return () => clearInterval(checkInterval);
+  }, [completedJobs]);
 
   // Handle job removal
   const handleRemoveJob = async (jobId) => {
     try {
-      await remove(dbRef(realtimeDb, `printJobs/${jobId}`));
+      console.log(`Removing print job: ${jobId}`);
+      
+      // Get current job data before removing it
+      const jobRef = dbRef(realtimeDb, `printJobs/${jobId}`);
+      const jobSnapshot = await get(jobRef);
+      
+      if (jobSnapshot.exists()) {
+        const jobData = jobSnapshot.val();
+        console.log(`Removing job: ${jobData.fileName}, Status: ${jobData.status}`);
+        
+        // Check if there are any other jobs with the same filename to prevent auto-creation
+        const printJobsRef = dbRef(realtimeDb, "printJobs");
+        const allJobsSnapshot = await get(printJobsRef);
+        
+        if (allJobsSnapshot.exists()) {
+          const allJobs = allJobsSnapshot.val();
+          
+          // Find any potential duplicate jobs (same filename but different IDs)
+          const duplicates = Object.entries(allJobs)
+            .filter(([otherJobId, job]) => 
+              otherJobId !== jobId && 
+              job.fileName === jobData.fileName);
+          
+          if (duplicates.length > 0) {
+            console.log(`Found ${duplicates.length} potential duplicate jobs that might reappear`);
+            
+            // Remove all duplicates as well
+            for (const [duplicateId] of duplicates) {
+              console.log(`Removing duplicate job: ${duplicateId}`);
+              await remove(dbRef(realtimeDb, `printJobs/${duplicateId}`));
+            }
+          }
+        }
+      }
+      
+      // Clear any pending print job from sessionStorage to prevent auto-recreation
+      const pendingJobData = sessionStorage.getItem('pendingPrintJob');
+      if (pendingJobData) {
+        try {
+          const pendingJob = JSON.parse(pendingJobData);
+          const removedJob = jobSnapshot.val();
+          
+          // Only remove from sessionStorage if it's the same file
+          if (removedJob && pendingJob.fileName === removedJob.fileName) {
+            console.log(`Clearing pending print job from sessionStorage for ${removedJob.fileName}`);
+            sessionStorage.removeItem('pendingPrintJob');
+          }
+        } catch (e) {
+          // If we can't parse the data, better to just remove it
+          console.log('Clearing invalid pending print job data from sessionStorage');
+          sessionStorage.removeItem('pendingPrintJob');
+        }
+      }
+      
+      // Remove the job from completedJobs tracking if it exists there
+      if (completedJobs[jobId]) {
+        console.log(`Removing job ${jobId} from completedJobs tracking`);
+        setCompletedJobs(prev => {
+          const updated = { ...prev };
+          delete updated[jobId];
+          return updated;
+        });
+      }
+      
+      // Remove the actual job
+      await remove(jobRef);
     } catch (error) {
       console.error("Error removing print job:", error);
     }
@@ -405,6 +596,27 @@ const Printer = () => {
 
   // Run stale job cleaner on component mount and every 5 minutes
   useEffect(() => {
+    // Clear any stale pending print jobs from sessionStorage
+    try {
+      const pendingJobData = sessionStorage.getItem('pendingPrintJob');
+      if (pendingJobData) {
+        const pendingJob = JSON.parse(pendingJobData);
+        const timestamp = pendingJob.timestamp || Date.now();
+        const currentTime = Date.now();
+        const FIVE_MINUTES = 5 * 60 * 1000;
+        
+        // If the pending job is more than 5 minutes old, remove it
+        if (currentTime - timestamp > FIVE_MINUTES) {
+          console.log('Clearing stale pending print job from sessionStorage');
+          sessionStorage.removeItem('pendingPrintJob');
+        }
+      }
+    } catch (e) {
+      // If we can't parse the data, just remove it
+      console.log('Clearing invalid pending print job data from sessionStorage');
+      sessionStorage.removeItem('pendingPrintJob');
+    }
+    
     // Immediately clean stale jobs when component mounts
     cleanStaleJobs();
     
@@ -504,10 +716,15 @@ const Printer = () => {
   };
 
   // Get detailed process stage description based on progress percentage
-  const getProcessStage = (progress, statusMessage) => {
+  const getProcessStage = (progress, statusMessage, status) => {
     // If there's a custom status message, use it
     if (statusMessage && statusMessage.trim() !== "") {
       return statusMessage;
+    }
+    
+    // Ensure completed jobs show completion message
+    if (status === "completed") {
+      return "Print job completed";
     }
     
     // Otherwise map progress to appropriate stage
@@ -532,8 +749,9 @@ const Printer = () => {
     return "progress-info";
   };
 
-  // Check if a task is completed based on job progress
+  // Check if a task is completed based on job progress or status
   const isTaskCompleted = (job, threshold) => {
+    if (job.status === "completed") return true;
     return (job.progress || 0) >= threshold;
   };
 
@@ -647,13 +865,15 @@ const Printer = () => {
                           <div className="mt-3">
                             <div className="flex justify-between items-center mb-1">
                               <span className="text-xs text-gray-500">
-                                {getProcessStage(job.progress || 0, job.statusMessage)}
+                                {getProcessStage(job.progress || 0, job.statusMessage, job.status)}
                               </span>
-                              <span className="text-xs font-medium">{job.progress || 0}%</span>
+                              <span className="text-xs font-medium">
+                                {job.status === "completed" ? "100" : (job.progress || 0)}%
+                              </span>
                             </div>
                             <progress 
                               className={`progress ${getProgressColorClass(job.progress || 0, job.status)} w-full`} 
-                              value={job.progress || 0} 
+                              value={job.status === "completed" ? 100 : (job.progress || 0)} 
                               max="100"
                             ></progress>
                             

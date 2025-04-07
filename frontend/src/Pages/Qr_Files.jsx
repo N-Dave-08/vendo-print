@@ -155,26 +155,38 @@ const QRUpload = () => {
     }
 
     let totalPrice = 0;
+    const baseBlackAndWhitePrice = 10;
+    const baseColorPrice = 12;
 
     if (selectedFile.colorAnalysis?.pageAnalysis) {
       // Calculate price based on color analysis of each page
       selectedFile.colorAnalysis.pageAnalysis.forEach(page => {
         // ₱12 for colored pages, ₱10 for black and white
-        const pagePrice = isColor && page.hasColor ? 12 : 10;
+        const pagePrice = isColor && page.hasColor ? baseColorPrice : baseBlackAndWhitePrice;
         totalPrice += pagePrice;
       });
     } else {
       // If no color analysis available, use base price
-      totalPrice = selectedFile.totalPages * (isColor ? 12 : 10);
+      totalPrice = selectedFile.totalPages * (isColor ? baseColorPrice : baseBlackAndWhitePrice);
     }
 
+    // Apply volume discounts before multiplying by copies
+    const totalPagesToPrint = selectedFile.totalPages * copies;
+    
+    // Apply volume discount based on total pages
+    if (totalPagesToPrint >= 100) {
+      // 15% discount for 100+ total pages
+      totalPrice = Math.round(totalPrice * 0.85);
+    } else if (totalPagesToPrint >= 50) {
+      // 10% discount for 50+ total pages
+      totalPrice = Math.round(totalPrice * 0.90);
+    } else if (totalPagesToPrint >= 20) {
+      // 5% discount for 20+ total pages
+      totalPrice = Math.round(totalPrice * 0.95);
+    }
+    
     // Multiply by number of copies
     totalPrice *= copies;
-    
-    // Apply smart pricing discount if enabled
-    if (isSmartPriceEnabled) {
-      totalPrice = Math.round(totalPrice * 0.85);
-    }
 
     setPrice(totalPrice);
   }, [selectedFile, copies, isColor, isSmartPriceEnabled]);
@@ -802,16 +814,29 @@ const QRUpload = () => {
               <div>
                           <h5 className="text-sm font-medium text-gray-600 mb-3">Number of Copies</h5>
                           <div className="flex items-center gap-3">
-                            <button className="btn btn-square btn-sm bg-base-100">
+                            <button 
+                              className="btn btn-square btn-sm bg-base-100"
+                              onClick={() => setCopies(Math.max(1, copies - 1))}
+                              aria-label="Decrease copies"
+                            >
                               <span className="text-lg">−</span>
                             </button>
                             <input 
                               type="text" 
-                              value="1" 
+                              value={copies} 
                               className="input input-bordered w-20 text-center" 
-                              readOnly
+                              onChange={(e) => {
+                                const value = parseInt(e.target.value);
+                                if (!isNaN(value) && value > 0) {
+                                  setCopies(value);
+                                }
+                              }}
                             />
-                            <button className="btn btn-square btn-sm bg-base-100">
+                            <button 
+                              className="btn btn-square btn-sm bg-base-100"
+                              onClick={() => setCopies(copies + 1)}
+                              aria-label="Increase copies"
+                            >
                               <span className="text-lg">+</span>
                             </button>
               </div>
@@ -947,14 +972,37 @@ const QRUpload = () => {
                             <span className="text-blue-600 text-xl font-semibold">₱</span>
                             <h5 className="font-semibold text-gray-800">Smart Price</h5>
                           </div>
-                          <div className="text-2xl font-bold text-blue-600">₱10.00</div>
+                          <div className="text-2xl font-bold text-blue-600">₱{price.toFixed(2)}</div>
                         </div>
                         <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <span>Color printing</span>
+                          <span>{isColor ? "Color" : "B&W"} printing</span>
                           <span className="text-gray-400">•</span>
-                          <span>1 copy</span>
+                          <span>{copies} {copies === 1 ? "copy" : "copies"}</span>
                           <span className="text-gray-400">•</span>
-                          <span>All 1 pages</span>
+                          <span>All {selectedFile.totalPages || 1} pages</span>
+                        </div>
+                        
+                        {/* Volume discount indicator */}
+                        {(() => {
+                          const totalPages = copies * (selectedFile.totalPages || 1);
+                          let discountRate = null;
+                          
+                          if (totalPages >= 100) discountRate = "15%";
+                          else if (totalPages >= 50) discountRate = "10%";
+                          else if (totalPages >= 20) discountRate = "5%";
+                          
+                          return discountRate && (
+                            <div className="mt-2 text-sm font-medium text-green-600 flex justify-between">
+                              <span>Volume Discount:</span>
+                              <span>{discountRate} OFF</span>
+                            </div>
+                          );
+                        })()}
+                        
+                        {/* Coins required indicator */}
+                        <div className="mt-2 text-sm font-medium text-primary flex justify-between">
+                          <span>Coins Required:</span>
+                          <span className="font-bold">{price}</span>
                         </div>
                       </div>
 
@@ -965,8 +1013,15 @@ const QRUpload = () => {
                             <p className="font-medium text-gray-800">Your Balance</p>
                             <p className="text-sm text-gray-500">Available coins</p>
                           </div>
-                          <div className="text-2xl font-bold text-primary">4,178</div>
+                          <div className="text-2xl font-bold text-primary">{balance}</div>
                         </div>
+                        
+                        {/* Insufficient balance warning */}
+                        {price > balance && (
+                          <div className="mt-2 text-sm text-error">
+                            Insufficient coins. You need {price - balance} more coins.
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -978,7 +1033,12 @@ const QRUpload = () => {
                     <button className="btn flex-1 min-h-[48px]" onClick={closePrintDialog}>
                 Cancel
               </button>
-                    <button className="btn btn-primary flex-1 min-h-[48px]" onClick={handlePrint}>
+                    <button 
+                      className="btn btn-primary flex-1 min-h-[48px]" 
+                      onClick={handlePrint}
+                      disabled={!selectedPrinter || price > balance}
+                      title={!selectedPrinter ? "Please select a printer" : price > balance ? `Insufficient balance (need ${price} coins)` : ""}
+                    >
                     Print
               </button>
                   </div>

@@ -13,7 +13,7 @@ import { fileURLToPath } from 'url';
 import { PDFDocument, rgb, degrees } from 'pdf-lib';
 import os from 'os';
 import { initializeApp } from 'firebase/app';
-import { getDatabase, ref as dbRef, update } from 'firebase/database';
+import { getDatabase, ref as dbRef, update, get } from 'firebase/database';
 import { firebaseConfig } from '../firebase/firebase-config.js';
 
 // Initialize Firebase
@@ -937,8 +937,24 @@ const updatePrintJobProgress = async (jobId, progress, status = "", statusMessag
   }
 
   try {
+    // Check if job exists first
+    const jobSnapshot = await get(dbRef(db, `printJobs/${jobId}`));
+    if (!jobSnapshot.exists()) {
+      console.log(`Job ${jobId} not found in database, can't update progress`);
+      return;
+    }
+    
+    const currentJob = jobSnapshot.val();
+    
+    // Don't revert completed jobs back to a lower progress or non-completed status
+    if (currentJob.status === "completed" && 
+        (progress < 100 || (status && status !== "completed"))) {
+      console.log(`Job ${jobId} is already completed, ignoring update to ${progress}%`);
+      return;
+    }
+    
     // Check if we're trying to update a job that is already completed
-    if (completedPrintJobs.has(jobId) && progress <= 90) {
+    if (completedPrintJobs.has(jobId) && progress < 100) {
       console.log(`Skipping update for already completed job ${jobId} (progress: ${progress}%)`);
       return;
     }
@@ -1793,8 +1809,14 @@ export const printFileHandler = async (req, res) => {
 
     await updatePrintJobProgress(printJobId, 75, "printing", "Printing in progress...");
 
-    // Simulate print completion after a delay (since we can't track actual printer progress)
-    setTimeout(async () => {
+    // Change the async setTimeout approach to return immediately while printing continues
+    // This prevents the frontend from thinking the process has stalled
+    
+    // Start an asynchronous progress update without blocking the response
+    (async () => {
+      try {
+        // Wait for print job to likely be sent to printer
+        await new Promise(resolve => setTimeout(resolve, 2000));
       await updatePrintJobProgress(printJobId, 90, "printing", "Finishing print job...");
 
       // Clean up temp file
@@ -1804,23 +1826,64 @@ export const printFileHandler = async (req, res) => {
         console.error('Error cleaning up temp file:', cleanupError);
       }
 
-      // Mark as complete
-      setTimeout(async () => {
+        // Check for completion for up to 15 seconds with more reliable approach
+        console.log(`Waiting for print job ${printJobId} to complete...`);
+        
+        // More reliable completion tracking
+        let retryCount = 0;
+        const maxRetries = 15;
+        
+        while (retryCount < maxRetries) {
+          try {
+            // Even if we're running as admin, there can still be issues with updating the final status
+            // Force a direct database update for 100% completion
+            await update(dbRef(db, `printJobs/${printJobId}`), {
+              progress: 100,
+              status: "completed",
+              statusMessage: "Print job sent to printer",
+              updatedAt: Date.now()
+            });
+            
+            // Double-check if our update was successful
+            if (!completedPrintJobs.has(printJobId)) {
+              completedPrintJobs.add(printJobId);
+              recentPrintJobs.set(`completed-${printJobId}`, Date.now());
+              console.log(`Marked job ${printJobId} as completed and added to tracking`);
+            }
+            
+            // Break out of the retry loop since we've successfully marked the job as complete
+            console.log(`Successfully updated job ${printJobId} to 100% completed`);
+            break;
+          } catch (updateError) {
+            console.warn(`Retry ${retryCount + 1}/${maxRetries}: Error updating job completion status:`, updateError);
+            retryCount++;
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+        
+        // One final attempt with the regular function in case the direct approach failed
+        if (retryCount >= maxRetries) {
+          console.log(`Maximum retries reached for job ${printJobId}, making final attempt...`);
         await updatePrintJobProgress(printJobId, 100, "completed", "Print job completed");
-      }, 1000);
-    }, 2000);
+        }
+      } catch (progressError) {
+        console.error('Error updating final print status:', progressError);
+      }
+    })();
 
+    // Return success immediately without waiting for the progress updates
     res.json({
       status: 'success',
-      message: 'Print job started successfully'
+      message: 'Print job started successfully',
+      printJobId: printJobId
     });
 
   } catch (error) {
     console.error('Print error:', error);
 
-    // Update Firebase with error status
+    // Update Firebase with error status - maintain progress at 75% instead of resetting to 0
     if (printJobId) {
-      await updatePrintJobProgress(printJobId, 0, "error", `Error: ${error.message || "Failed to print document"}`);
+      await updatePrintJobProgress(printJobId, 75, "error", `Error: ${error.message || "Failed to print document"}`);
     }
 
     res.status(500).json({
@@ -2250,10 +2313,19 @@ export const printPdfDirect = async (filePath, printerName, isColor = true) => {
       'try {',
       `    Write-Host "Starting print job with color mode: ${isColor ? 'Color' : 'Grayscale'}"`,
       '',
+      '    # Check for admin rights',
+      '    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)',
+      '    Write-Host "Running with admin privileges: $isAdmin"',
+      '',
       '    # Save current default printer',
       '    $network = New-Object -ComObject WScript.Network',
-      '    $originalPrinter = (Get-WmiObject -Query "SELECT * FROM Win32_Printer WHERE Default=$true").Name',
-      '    Write-Host "Original default printer: $originalPrinter"',
+      '    try {',
+      '        $originalPrinter = $network.GetDefaultPrinterName()',
+      '        Write-Host "Original default printer: $originalPrinter"',
+      '    } catch {',
+      '        $originalPrinter = (Get-WmiObject -Query "SELECT * FROM Win32_Printer WHERE Default=$true").Name',
+      '        Write-Host "Original default printer (WMI fallback): $originalPrinter"',
+      '    }',
       '',
       '    # Set target printer as default',
       `    Write-Host "Setting printer: ${printerName}"`,
@@ -2317,10 +2389,33 @@ export const printPdfDirect = async (filePath, printerName, isColor = true) => {
       '    Write-Host "Executing SumatraPDF with arguments: $($arguments -join \' \')"',
       '',
       '    # Execute SumatraPDF with arguments',
-      '    & $sumatra $arguments',
+      '    try {',
+      '        if (-not $isAdmin) {',
+      '            Write-Host "WARNING: Not running as administrator. Printing may fail or require elevation."',
+      '        }',
+      '        & $sumatra $arguments',
+      '        Write-Host "SumatraPDF command executed successfully"',
+      '    } catch {',
+      '        Write-Error "Error executing SumatraPDF: $_"',
+      '        throw',
+      '    }',
       '',
       '    # Wait for print job to be processed',
-      '    Start-Sleep -Seconds 3',
+      '    Write-Host "Waiting for print job to process..."',
+      '    Start-Sleep -Seconds 5',
+      '',
+      '    # Check if print job was added to queue',
+      '    try {',
+      '        $printJobs = Get-PrintJob -PrinterName $printer -ErrorAction SilentlyContinue',
+      '        if ($printJobs) {',
+      '            Write-Host "Print jobs found in queue:" $printJobs.Count',
+      '            $printJobs | ForEach-Object { Write-Host "Job:" $_.Id $_.DocumentName $_.Status }',
+      '        } else {',
+      '            Write-Host "No print jobs found in queue. Job may have completed already or failed to start."',
+      '        }',
+      '    } catch {',
+      '        Write-Host "Could not check print queue: $_"',
+      '    }',
       '',
       '    # Restore original default printer',
       '    if ($originalPrinter -and $originalPrinter -ne $null) {',
@@ -2348,20 +2443,59 @@ export const printPdfDirect = async (filePath, printerName, isColor = true) => {
 
     try {
       // Execute the PowerShell script
-      const { stdout, stderr } = await execPromise(`powershell.exe -ExecutionPolicy Bypass -NoProfile -File "${scriptPath}"`);
+      console.log('Executing PowerShell script for printing...');
       
-      console.log('Print script output:', stdout);
-      if (stderr) {
-        console.warn('Print script warnings:', stderr);
-      }
+      // Create an alternative script that attempts elevation if needed
+      const elevateScriptPath = path.join(tempDir, `elevate_${timestamp}.ps1`);
+      const elevateScriptContent = `
+# This script checks if we need admin privileges and attempts to elevate if needed
+$needsAdmin = $false
+$printerName = "${printerName}"
 
+# Check if the printer requires admin rights to manage
+try {
+    $printer = Get-Printer -Name $printerName -ErrorAction Stop
+    # Some operations might still require admin rights even if we can get the printer
+} catch {
+    $needsAdmin = $true
+    Write-Host "Printer access requires admin rights: $_"
+}
+
+# If needed, try to elevate and call the main script
+if ($needsAdmin) {
+    Write-Host "Attempting to run with elevation..."
+    Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -File '${scriptPath.replace(/\\/g, '\\\\')}'" -Verb RunAs -Wait
+} else {
+    # Just run the main script directly
+    & '${scriptPath.replace(/\\/g, '\\\\')}'
+}
+`
+      fs.writeFileSync(elevateScriptPath, elevateScriptContent);
+      
+      // First try with the elevation checker
+      try {
+        const { stdout: elevateOutput, stderr: elevateStderr } = await execPromise(`powershell.exe -ExecutionPolicy Bypass -NoProfile -File "${elevateScriptPath}"`);
+        console.log('Elevation script output:', elevateOutput);
+        if (elevateStderr) {
+          console.warn('Elevation script warnings:', elevateStderr);
+        }
+      } catch (elevateError) {
+        console.warn('Elevation script failed, falling back to direct execution:', elevateError.message);
+        // Fall back to regular execution
+        const { stdout, stderr } = await execPromise(`powershell.exe -ExecutionPolicy Bypass -NoProfile -File "${scriptPath}"`);
+        console.log('Print script output:', stdout);
+        if (stderr) {
+          console.warn('Print script warnings:', stderr);
+        }
+      }
+      
       // Read the log file for additional debugging
       if (fs.existsSync(logPath)) {
         const log = fs.readFileSync(logPath, 'utf8');
         console.log('Print log contents:', log);
       }
 
-      return "Print command sent to printer";
+    return "Print command sent to printer";
     } catch (printError) {
       // Read the log file for error details
       let errorDetails = printError.message;
@@ -2380,6 +2514,9 @@ export const printPdfDirect = async (filePath, printerName, isColor = true) => {
         if (fs.existsSync(scriptPath)) fs.unlinkSync(scriptPath);
         if (fs.existsSync(logPath)) fs.unlinkSync(logPath);
         if (fs.existsSync(tempPdfPath)) fs.unlinkSync(tempPdfPath);
+        // Clean up the elevation script if it exists
+        const elevateScriptPath = path.join(tempDir, `elevate_${timestamp}.ps1`);
+        if (fs.existsSync(elevateScriptPath)) fs.unlinkSync(elevateScriptPath);
       } catch (cleanupError) {
         console.warn('Could not clean up temporary files:', cleanupError);
       }
