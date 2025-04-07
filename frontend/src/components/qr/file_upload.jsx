@@ -5,8 +5,7 @@ import { storage, realtimeDb } from "../../../firebase/firebase_config";
 import { ref as dbRef, set, push } from "firebase/database";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import mammoth from "mammoth";
-import { faSpinner, faFileUpload, faFilePdf, faFileWord, faFileImage } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { Loader, Upload, FileText, FileImage } from "lucide-react";
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableCell, TableRow, WidthType, BorderStyle } from "docx";
@@ -817,20 +816,20 @@ const FileUpload = () => {
 
     // Check if it's an image by both MIME type and extension
     if (isImageFile(fileToUpload.type)) {
-      return <FontAwesomeIcon icon={faFileImage} className="text-green-500 text-3xl" />;
+      return <FileImage className="text-green-500 text-3xl" />;
     } else if (fileToUpload.type === "application/pdf") {
-      return <FontAwesomeIcon icon={faFilePdf} className="text-red-500 text-3xl" />;
+      return <FileText className="text-red-500 text-3xl" />;
     } else if (fileToUpload.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-      return <FontAwesomeIcon icon={faFileWord} className="text-blue-500 text-3xl" />;
+      return <FileText className="text-blue-500 text-3xl" />;
     }
 
     // Fallback check by extension
     const extension = fileToUpload.name.toLowerCase().split('.').pop();
     if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(extension)) {
-      return <FontAwesomeIcon icon={faFileImage} className="text-green-500 text-3xl" />;
+      return <FileImage className="text-green-500 text-3xl" />;
     }
 
-    return <FontAwesomeIcon icon={faFileWord} className="text-blue-500 text-3xl" />;
+    return <FileText className="text-blue-500 text-3xl" />;
   };
 
   const getFilePreview = () => {
@@ -918,12 +917,12 @@ const FileUpload = () => {
     <div className="min-h-screen flex items-center justify-center bg-gray-100">
       {/* Initial info modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-xs">
           <div className="bg-white p-8 rounded-xl shadow-2xl text-center max-w-md w-full mx-4 transform transition-all">
             <div className="flex justify-center space-x-4 mb-6">
-              <FontAwesomeIcon icon={faFilePdf} className="text-red-500 text-4xl" />
-              <FontAwesomeIcon icon={faFileWord} className="text-blue-500 text-4xl" />
-              <FontAwesomeIcon icon={faFileImage} className="text-green-500 text-4xl" />
+              <FileText className="text-red-500 text-4xl" />
+              <FileText className="text-blue-500 text-4xl" />
+              <FileImage className="text-green-500 text-4xl" />
             </div>
             <h2 className="text-2xl font-bold mb-4 text-gray-800">Upload Your Document</h2>
             <p className="mb-6 text-gray-600">
@@ -962,8 +961,7 @@ const FileUpload = () => {
             htmlFor="file-upload"
             className="flex flex-col items-center cursor-pointer"
           >
-            <FontAwesomeIcon
-              icon={faFileUpload}
+            <Upload
               className={`text-4xl mb-4 ${dragActive ? 'text-primary' : 'text-gray-400'}`}
             />
             <p className="text-center text-gray-600">
@@ -997,7 +995,7 @@ const FileUpload = () => {
             <div className="flex items-center space-x-4">
               {/* Show the icon based on the original file type, not the converted file */}
               {fileToUpload && fileToUpload.name.toLowerCase().endsWith('.docx') ?
-                <FontAwesomeIcon icon={faFileWord} className="text-blue-500 text-3xl" /> :
+                <FileText className="text-blue-500 text-3xl" /> :
                 getFilePreview()
               }
               <div className="flex-1">

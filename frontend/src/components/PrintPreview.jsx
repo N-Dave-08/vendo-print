@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { X, Printer, Download, Check } from "lucide-react";
+import axios from "axios";
 
 // Add styles to clean up the preview
 const previewStyles = {
@@ -34,13 +35,26 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
   const [printSuccess, setPrintSuccess] = useState(false);
   const [blobUrl, setBlobUrl] = useState(null);
   const [printerName, setPrinterName] = useState("");
+  const [printers, setPrinters] = useState([]);
   const [printSettings, setPrintSettings] = useState({
     copies: printOptions.copies || 1,
     isColor: printOptions.isColor || false,
     orientation: printOptions.orientation || "portrait",
-    paperSize: printOptions.paperSize || "a4"
+    paperSize: printOptions.paperSize || "letter", // Use letter size (8.5x11)
+    scale: printOptions.scale || "fit-to-page" // Set scale to fit to page
   });
   const iframeRef = useRef(null);
+
+  // Function to check if a printer name is likely a virtual printer
+  const isVirtualPrinter = (printerName) => {
+    const virtualPrinterPatterns = [
+      'microsoft', 'pdf', 'xps', 'document writer', 'onedrive', 
+      'fax', 'print to', 'onenote', 'adobe pdf'
+    ];
+    
+    const lowerName = printerName.toLowerCase();
+    return virtualPrinterPatterns.some(pattern => lowerName.includes(pattern));
+  };
 
   useEffect(() => {
     // Fetch the file and create a blob URL to prevent auto-download
@@ -68,6 +82,35 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
     };
   }, [fileUrl]);
 
+  // Fetch printers from API
+  useEffect(() => {
+    const fetchPrinters = async () => {
+      try {
+        const response = await axios.get("http://localhost:5000/api/printers");
+        const printerList = response.data.printers || [];
+        setPrinters(printerList);
+        
+        // Auto-select first printer if available
+        if (printerList.length > 0 && !printerName) {
+          // Try to find a physical printer first
+          const physicalPrinters = printerList.filter(printer => !isVirtualPrinter(printer.name));
+          
+          if (physicalPrinters.length > 0) {
+            // Use the first physical printer
+            setPrinterName(physicalPrinters[0].name);
+          } else {
+            // Fall back to the first printer in the list if no physical printers found
+            setPrinterName(printerList[0].name);
+          }
+        }
+      } catch (error) {
+        console.error("Error fetching printers:", error);
+      }
+    };
+    
+    fetchPrinters();
+  }, []);
+
   const handleCopiesChange = (e) => {
     const value = parseInt(e.target.value);
     if (value > 0 && value <= 10) {
@@ -83,14 +126,6 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
     setPrintSettings({ ...printSettings, orientation: e.target.value });
   };
 
-  const handlePaperSizeChange = (e) => {
-    setPrintSettings({ ...printSettings, paperSize: e.target.value });
-  };
-
-  const handlePrinterChange = (e) => {
-    setPrinterName(e.target.value);
-  };
-
   const handlePrint = async () => {
     try {
       setLoading(true);
@@ -102,6 +137,9 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
       const response = await fetch(blobUrl);
       const blob = await response.blob();
 
+      // Create a unique ID for the job
+      const printJobId = Date.now().toString();
+
       // Append the file and print settings
       formData.append('file', blob, 'document.pdf');
       formData.append('printerName', printerName || 'EPSON L3210 Series');
@@ -109,6 +147,9 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
       formData.append('copies', printSettings.copies);
       formData.append('orientation', printSettings.orientation);
       formData.append('paperSize', printSettings.paperSize);
+      formData.append('scale', printSettings.scale);
+      formData.append('jobId', printJobId);
+      formData.append('printJobId', printJobId);
 
       // Call the backend API to handle the print job
       const printResponse = await fetch('/api/print', {
@@ -183,7 +224,7 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
                   type="checkbox"
                   checked={printSettings.isColor}
                   onChange={handleColorChange}
-                  className="rounded"
+                  className="rounded-sm"
                 />
                 <span className="text-sm font-medium text-gray-700">Color</span>
               </label>
@@ -201,30 +242,28 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
               </select>
             </div>
 
+            {/* Paper Size */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-1">Paper Size</label>
-              <select
-                value={printSettings.paperSize}
-                onChange={handlePaperSizeChange}
-                className="w-full px-3 py-2 border rounded-md"
-              >
-                <option value="short-bond">Short Bond (8.5 x 11 in)</option>
-                <option value="a4">A4 (210 x 297 mm)</option>
-                <option value="long-bond">Long Bond (8.5 x 14 in)</option>
-              </select>
+              <div className="px-3 py-2 border rounded-md bg-gray-100 text-gray-700">
+                Letter (8.5 x 11 in)
+              </div>
+            </div>
+
+            {/* Scale */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Scale</label>
+              <div className="px-3 py-2 border rounded-md bg-gray-100 text-gray-700">
+                Fit to page
+              </div>
             </div>
 
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-1">Printer</label>
-              <select
-                value={printerName}
-                onChange={handlePrinterChange}
-                className="w-full px-3 py-2 border rounded-md"
-              >
-                <option value="">Auto-select printer</option>
-                <option value="printer1">Printer 1</option>
-                <option value="printer2">Printer 2</option>
-              </select>
+              <div className="flex items-center border rounded-md p-3 bg-white">
+                <Printer className="w-5 h-5 mr-3 text-blue-500" />
+                <span className="font-medium">{printerName || "Loading printer..."}</span>
+              </div>
             </div>
           </div>
 
@@ -253,7 +292,7 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
             ) : (
               <iframe
                 ref={iframeRef}
-                src={blobUrl}
+                src={`${blobUrl}#toolbar=0&navpanes=0&scrollbar=0&paperSize=letter&pagemode=thumbs&view=FitH&scale=100&printScale=fit-to-page`}
                 className="w-full h-full border-none"
                 title="Document Preview"
               />
@@ -264,7 +303,7 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
         {/* Footer */}
         <div className="p-4 border-t flex justify-between items-center">
           <div className="text-sm text-gray-500">
-            {!loading && !printSuccess && `${printSettings.copies} ${printSettings.copies > 1 ? 'copies' : 'copy'}, ${printSettings.isColor ? 'Color' : 'Black & White'}, ${printSettings.orientation}, ${printSettings.paperSize === 'a4' ? 'A4' : printSettings.paperSize === 'long-bond' ? 'Long Bond' : 'Short Bond'}`}
+            {!loading && !printSuccess && `${printSettings.copies} ${printSettings.copies > 1 ? 'copies' : 'copy'}, ${printSettings.isColor ? 'Color' : 'Black & White'}, ${printSettings.orientation}, Letter (8.5 x 11 in), Fit to page`}
           </div>
           <div className="flex space-x-2">
             <button

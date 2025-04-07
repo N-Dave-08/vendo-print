@@ -1,6 +1,71 @@
-# VendoPrint
+# Vendo-Print
 
-VendoPrint is a digital printing kiosk application that allows users to upload and print documents from various sources including USB drives and QR codes.
+Digital vending machine for printing documents.
+
+## Recent Updates
+
+### Reusable PrintSettings Component
+
+A new reusable `PrintSettings` component has been implemented to standardize print settings UI across all printing modes. This component is now used in:
+- USB Print page
+- Xerox page
+- QR Files page
+
+#### Component Props:
+
+```jsx
+<PrintSettings 
+  // Printer settings
+  selectedPrinter={selectedPrinter}
+  setSelectedPrinter={setSelectedPrinter}
+  printerCapabilities={printerCapabilities}
+  setPrinterCapabilities={setPrinterCapabilities}
+  
+  // Copies
+  copies={copies}
+  setCopies={setCopies}
+  
+  // Color settings
+  isColor={isColor}
+  setIsColor={setIsColor}
+  
+  // Orientation
+  orientation={orientation}
+  setOrientation={setOrientation}
+  
+  // Page selection (only shown if filePreviewUrl is provided)
+  filePreviewUrl={filePreviewUrl}
+  selectedPageOption={selectedPageOption}
+  setSelectedPageOption={setSelectedPageOption}
+  customPageRange={customPageRange}
+  setCustomPageRange={setCustomPageRange}
+  totalPages={totalPages}
+  
+  // Smart Price
+  isSmartPriceEnabled={isSmartPriceEnabled}
+  setIsSmartPriceEnabled={setIsSmartPriceEnabled}
+  calculatedPrice={calculatedPrice}
+  setCalculatedPrice={setCalculatedPrice}
+/>
+```
+
+### Features
+
+- Printer selection
+- Number of copies
+- Color vs. B&W printing
+- Portrait vs. Landscape orientation
+- Page range selection (All, Custom)
+- Smart Price toggle with automatic pricing
+
+### Enhanced Document Preview 
+- Improved PDF detection and rendering
+- Better support for Office documents (Word, Excel, PowerPoint)
+- File type icons with appropriate colors
+
+### Improved Printing with Direct Windows Printing
+- Native Windows printing commands
+- Support for color mode selection
 
 ## Setup Guide
 

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { FaArrowLeft } from "react-icons/fa";
-import { Printer, ArrowLeft, X } from "lucide-react";
+import { Printer, ArrowLeft, X, FileText } from "lucide-react";
 import MiniNav from "../components/MiniNav";
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
@@ -11,6 +10,8 @@ import DocumentPreview from "../components/common/document_preview";
 import SmartPriceToggle from "../components/common/smart_price";
 import PrinterList from "../components/usb/printerList";
 import SelectColor from "../components/usb/select_color";
+import PrintSettings from "../components/common/PrintSettings";
+import UsbDrivePanel from "../components/usb/UsbDrivePanel";
 
 import { realtimeDb, storage } from "../../firebase/firebase_config";
 import { ref as dbRef, push, get, update, set } from "firebase/database";
@@ -33,13 +34,12 @@ const Usb = () => {
   const [selectedSize, setSelectedSize] = useState("Short Bond");
   const [isColor, setIsColor] = useState(false);
   const [orientation, setOrientation] = useState("portrait");
-  const [selectedPageOption, setSelectedPageOption] = useState("All");
-  const [customPageRange, setCustomPageRange] = useState("");
   const [totalPages, setTotalPages] = useState(1);
   const [isSmartPriceEnabled, setIsSmartPriceEnabled] = useState(false);
   const [calculatedPrice, setCalculatedPrice] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [availableCoins, setAvailableCoins] = useState(0);
+  const [colorAnalysis, setColorAnalysis] = useState(null);
 
   // Add print status state
   const [printStatus, setPrintStatus] = useState("");
@@ -54,6 +54,17 @@ const Usb = () => {
 
   const [selectedPrinter, setSelectedPrinter] = useState("");
   const [printerCapabilities, setPrinterCapabilities] = useState(null);
+  
+  // Add state to track if USB Panel is shown
+  const [showUsbPanel, setShowUsbPanel] = useState(true);
+
+  // Function to handle document load
+  const onDocumentLoad = (info) => {
+    console.log("Document loaded:", info);
+    if (info && info.numPages) {
+      setTotalPages(info.numPages);
+    }
+  };
 
   // Improved DOCX to PDF conversion function
   const improvedConvertDocxToPdf = async (docxArrayBuffer, fileName) => {
@@ -677,9 +688,56 @@ const Usb = () => {
     return () => unsubscribe();
   }, []);
 
-  const handleFileSelect = async (e) => {
-    const selectedFile = e.target.files[0];
+  useEffect(() => {
+    // Add event listener for color analysis messages
+    const handleMessage = (event) => {
+      if (event.data.type === 'colorAnalysisComplete') {
+        console.log('Color analysis results received:', event.data.results);
+        setColorAnalysis(event.data.results);
+      }
+    };
 
+    window.addEventListener('message', handleMessage);
+
+    return () => {
+      window.removeEventListener('message', handleMessage);
+    };
+  }, []);
+
+  // Handle file selection from USB drive
+  const handleUsbFileSelect = async (file) => {
+    console.log("USB file selected:", file);
+    
+    try {
+      // Show loading indicator
+      setIsLoading(true);
+      setPrintProgress(10);
+      setPrintStatus("Processing file from USB drive...");
+
+      // Create a File object from the path
+      const response = await fetch(`http://localhost:5000/api/read-file?path=${encodeURIComponent(file.path)}`);
+      
+      if (!response.ok) {
+        throw new Error('Failed to read file from USB drive');
+      }
+      
+      const fileBlob = await response.blob();
+      const fileName = file.name;
+      const fileObj = new File([fileBlob], fileName, { type: fileBlob.type });
+      
+      // Now process the file as if it was selected via input
+      await processSelectedFile(fileObj);
+      
+    } catch (error) {
+      console.error("Error handling USB file:", error);
+      setIsLoading(false);
+      setPrintStatus("Error reading file from USB. Please try again.");
+      setPrintProgress(0);
+    }
+  };
+  
+  // Extract file processing logic to a separate function
+  const processSelectedFile = async (selectedFile) => {
     if (!selectedFile) return;
 
     try {
@@ -845,6 +903,9 @@ const Usb = () => {
             });
 
             console.log('Color analysis results:', colorAnalysisResult);
+            
+            // Update color analysis state
+            setColorAnalysis(colorAnalysisResult.results);
 
             // Get the storage path
             const storagePath = uploadTask.snapshot.ref.fullPath;
@@ -939,10 +1000,10 @@ const Usb = () => {
         printerName: selectedPrinter,
         copies: copies,
         selectedSize,
+        paperSize: "letter", // Always use letter size
+        scale: "fit-to-page", // Always use fit-to-page
         isColor,
         orientation,
-        selectedPageOption,
-        customPageRange,
         totalPages,
         price: calculatedPrice,
         progress: 5, // Start with 5% right away
@@ -986,6 +1047,7 @@ const Usb = () => {
       // Continue with API call in the background
       const printJob = {
         jobId: printJobId,
+        printJobId: printJobId,
         fileName: fileName,
         fileUrl: filePreviewUrl,
         printerName: selectedPrinter,
@@ -993,9 +1055,9 @@ const Usb = () => {
         selectedSize,
         isColor,
         orientation,
-        selectedPageOption,
-        customPageRange,
-        totalPages
+        totalPages,
+        paperSize: "letter", // Set default paper size to letter
+        scale: "fit-to-page" // Set default scale to fit-to-page
       };
 
       // Make API call in the background
@@ -1047,11 +1109,10 @@ const Usb = () => {
         fileUrl: filePreviewUrl,
         printerName: selectedPrinter,
         copies: copies,
-        paperSize: selectedSize,
+        paperSize: "letter", // Always use letter size
+        scale: "fit-to-page", // Always use fit-to-page
         isColor: isColor,
         orientation: orientation,
-        pageOption: selectedPageOption,
-        customPageRange: customPageRange,
         totalPages: totalPages,
         finalPrice: calculatedPrice,
         timestamp: new Date().toISOString(),
@@ -1082,23 +1143,15 @@ const Usb = () => {
 
   // Add a function to handle direct downloading for Word docs
   const handleDocDownload = () => {
-    if (!filePreviewUrl) return;
-
-    // Create an anchor element
-    const downloadLink = document.createElement('a');
-    downloadLink.href = filePreviewUrl;
-
-    // Set the download attribute with the file name
-    downloadLink.download = fileToUpload?.name || 'document.docx';
-
-    // Append to the body
-    document.body.appendChild(downloadLink);
-
-    // Trigger the download
-    downloadLink.click();
-
-    // Clean up
-    document.body.removeChild(downloadLink);
+    if (filePreviewUrl) {
+      // Create a temporary link element to trigger download
+      const link = document.createElement("a");
+      link.href = filePreviewUrl;
+      link.download = fileToUpload ? fileToUpload.name : "document";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
 
   // In the handlePrintFile function, pass along the storage path
@@ -1141,313 +1194,200 @@ const Usb = () => {
     }
   };
 
+  const handleClearFile = () => {
+    // Clear file preview and reset related state
+    setFilePreviewUrl("");
+    setFileToUpload(null);
+    setPrintStatus("");
+    setPrintProgress(0);
+    setTotalPages(1);
+    setIsColor(false);
+    setSelectedSize("Short Bond");
+    setOrientation("portrait");
+    setIsSmartPriceEnabled(false);
+    setCalculatedPrice(0);
+    setSelectedPrinter("");
+    setPrinterCapabilities(null);
+  };
+
   return (
-    <ClientContainer>
-      {/* Main Box Container */}
-      <div className="flex flex-col w-full h-full bg-gray-200 rounded-lg shadow-md border-4 border-[#31304D] p-6 space-x-4 relative">
-        {/* Top Section */}
-        <div className="flex w-full space-x-6">
-          {/* Left Side */}
-          <div className="w-1/2 flex flex-col">
-            <div className="flex items-center">
-              <button
-                className="w-10 h-10 bg-gray-200 text-[#31304D] flex items-center justify-center rounded-lg border-2 border-[#31304D] mr-4"
-                onClick={() => navigate(-1)}
-              >
-                <FaArrowLeft className="text-2xl text-[#31304D]" />
-              </button>
-              <p className="text-3xl font-bold text-[#31304D]">USB</p>
+    <div className="h-screen overflow-hidden flex flex-col bg-base-200">
+      <div className="container mx-auto px-4 py-4 flex flex-col h-full">
+        {/* Page Header */}
+        <div className="flex items-center gap-3 mb-3">
+          <button
+            className="btn btn-circle btn-ghost btn-sm"
+            onClick={() => navigate(-1)}
+            aria-label="Go back"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <h1 className="text-2xl font-bold text-primary">USB Print</h1>
+          
+          {/* Balance Display - moved to header */}
+          <div className="ml-auto">
+            <div className="badge badge-lg badge-primary text-base-100 font-bold">
+              Inserted coins: {availableCoins}
             </div>
+          </div>
+        </div>
 
-            {/* File Upload Section */}
-            <div className="mt-6 space-y-4">
-              {showModal && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                  <div className="bg-white p-8 rounded-md shadow-md relative max-w-full">
-                    {/* Close Button */}
-                    <button
-                      onClick={closeModal}
-                      className="absolute top-2 right-2 text-2xl font-bold hover:text-red-600"
-                    >
-                      <X size={24} />
-                    </button>
-
-                    <h2 className="text-4xl font-bold mb-4 text-center">
-                      Guide
-                    </h2>
-
-                    <ul className="list-disc list-inside mb-4 text-2xl">
-                      <li><span className="font-bold text-blue-500">Please send your file via USB to VendoPrint.</span></li>
-                      <li className="font-bold">Make sure you have enough coins in your account.</li>
-                      <li className="font-semibold">Once your file is transferred, select or browse it below to upload.</li>
-                    </ul>
+        {/* Main Content Area with proper overflow handling */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 overflow-hidden">
+          {/* Left Column - File Selection and Settings with own scrollbar */}
+          <div className="overflow-y-auto pr-2 pb-2">
+            <div className="flex flex-col gap-4">
+              {/* USB Drive Panel */}
+              <UsbDrivePanel onFileSelect={handleUsbFileSelect} />
+              
+              {/* Use the reusable PrintSettings component */}
+              <PrintSettings 
+                selectedPrinter={selectedPrinter}
+                setSelectedPrinter={setSelectedPrinter}
+                printerCapabilities={printerCapabilities}
+                setPrinterCapabilities={setPrinterCapabilities}
+                copies={copies}
+                setCopies={setCopies}
+                isColor={isColor}
+                setIsColor={setIsColor}
+                orientation={orientation}
+                setOrientation={setOrientation}
+                filePreviewUrl={filePreviewUrl}
+                totalPages={totalPages}
+                isSmartPriceEnabled={isSmartPriceEnabled}
+                setIsSmartPriceEnabled={setIsSmartPriceEnabled}
+                calculatedPrice={calculatedPrice}
+                setCalculatedPrice={setCalculatedPrice}
+                colorAnalysis={colorAnalysis}
+              />
+              
+              {/* Only show message if no file is selected */}
+              {!filePreviewUrl && (
+                <div className="mt-6 text-center">
+                  <div className="text-sm text-gray-500 mb-4">
+                    Connect your USB drive to select a file for printing
                   </div>
                 </div>
               )}
+            </div>
+          </div>
 
-              {/* External Viewer Modal */}
-              {useExternalViewer && externalViewerUrl && (
-                <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
-                  <div className="bg-white rounded-lg shadow-lg w-full h-[90vh] flex flex-col max-w-6xl">
-                    <div className="flex justify-between items-center p-4 border-b">
-                      <h2 className="text-xl font-semibold">Document Preview - {fileToUpload?.name}</h2>
-                      <div className="flex items-center gap-4">
+          {/* Right Column - Document Preview with own scrollbar */}
+          <div className="overflow-y-auto pl-2 pb-2">
+            <div className="card bg-base-100 shadow-sm h-full flex flex-col">
+              <div className="card-body p-4 flex-1 flex flex-col">
+                <h2 className="card-title text-base text-primary mb-2">Document Preview</h2>
+                
+                <div className="flex-1 bg-base-200 rounded-lg flex flex-col overflow-hidden">
+                  {filePreviewUrl ? (
+                    <div className="relative w-full h-full flex flex-col">
+                      <div className="absolute top-2 right-2 z-10">
                         <button
-                          className="px-4 py-2 bg-primary text-white rounded-md hover:bg-primary-dark flex items-center"
-                          onClick={() => {
-                            const printUrl = externalViewerUrl.replace('/embed?', '/view?');
-                            window.open(printUrl, '_blank', 'width=800,height=600');
-                          }}
+                          className="btn btn-circle btn-sm btn-error"
+                          onClick={handleClearFile}
+                          aria-label="Clear file"
                         >
-                          <Printer size={18} className="mr-2" />
-                          Open Print View
-                        </button>
-                        <button
-                          className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 flex items-center"
-                          onClick={handleDocDownload}
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                            <polyline points="7 10 12 15 17 10"></polyline>
-                            <line x1="12" y1="15" x2="12" y2="3"></line>
-                          </svg>
-                          Download
-                        </button>
-                        <button
-                          onClick={handleCloseExternalViewer}
-                          className="p-2 rounded-full hover:bg-gray-100"
-                        >
-                          <X size={24} />
+                          <X size={16} />
                         </button>
                       </div>
-                    </div>
-                    <div className="flex-1 overflow-hidden">
-                      <iframe
-                        src={externalViewerUrl}
-                        className="w-full h-full border-none"
-                        title="Document Preview"
-                        sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads"
-                        referrerpolicy="no-referrer"
+                      <DocumentPreview
+                        url={filePreviewUrl}
+                        className="flex-1 overflow-hidden"
+                        onDocumentLoad={onDocumentLoad}
+                        externalViewerUrl={externalViewerUrl}
+                        useExternalViewer={useExternalViewer}
+                        fileName={fileToUpload ? fileToUpload.name : "document.pdf"}
                       />
+                      <div className="p-2 flex justify-center">
+                        <a 
+                          href={filePreviewUrl} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="btn btn-sm btn-primary"
+                        >
+                          Open file in new window
+                        </a>
+                      </div>
                     </div>
-                    <div className="p-4 bg-gray-100 border-t text-center">
-                      <p className="text-sm text-gray-600 mb-2">Having trouble seeing the document?</p>
-                      <a
-                        href={externalViewerUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline"
-                      >
-                        Open in new tab
-                      </a>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200">
-                <h2 className="text-xl font-bold text-primary mb-4 flex items-center">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="mr-2" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                    <polyline points="14 2 14 8 20 8"></polyline>
-                    <line x1="16" y1="13" x2="8" y2="13"></line>
-                    <line x1="16" y1="17" x2="8" y2="17"></line>
-                    <polyline points="10 9 9 9 8 9"></polyline>
-                  </svg>
-                  Choose File
-                </h2>
-                <div className="relative">
-                  <input
-                    type="file"
-                    onChange={handleFileSelect}
-                    accept=".pdf,.doc,.docx"
-                    className="w-full border-2 border-gray-300 rounded p-2 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-primary file:text-white hover:file:bg-primary-dark"
-                  />
-                  {isLoading && (
-                    <div className="mt-2 text-sm text-gray-600">
-                      Uploading...
+                  ) : (
+                    <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+                      <FileText className="h-12 w-12 text-primary/30 mb-4" />
+                      <p className="text-base-content/70">
+                        Select a file to preview and print
+                      </p>
+                      <p className="text-xs text-base-content/50 mt-2">
+                        Supported formats: PDF, DOC, DOCX, JPG, PNG, XLS, XLSX
+                      </p>
                     </div>
                   )}
                 </div>
-              </div>
 
-              {/* Print Settings Section */}
-              <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200">
-                <h2 className="text-xl font-bold text-primary mb-4">Print Settings</h2>
-
-                {/* Printer Selection */}
-                <div className="mb-6">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Select Printer
-                  </label>
-                  <PrinterList
-                    selectedPrinter={selectedPrinter}
-                    setSelectedPrinter={setSelectedPrinter}
-                    onPrinterCapabilities={setPrinterCapabilities}
-                  />
-                </div>
-
-                {/* Copies */}
-                <div className="mb-6">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Copies
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="10"
-                    value={copies}
-                    onChange={(e) => setCopies(parseInt(e.target.value))}
-                    className="w-full px-3 py-2 border rounded-md bg-white text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                </div>
-
-                {/* Paper Size */}
-                <div className="mb-6">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Paper Size
-                  </label>
-                  <select
-                    value={selectedSize}
-                    onChange={(e) => setSelectedSize(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-md bg-white text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    <option value="Short Bond">Short Bond (8.5 x 11)</option>
-                    <option value="A4">A4 (8.3 x 11.7)</option>
-                    <option value="Long Bond">Long Bond (8.5 x 14)</option>
-                  </select>
-                </div>
-
-                {/* Color Option */}
-                <div className="mb-6">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Color
-                  </label>
-                  <SelectColor
-                    isColor={isColor}
-                    setIsColor={setIsColor}
-                    printerCapabilities={printerCapabilities}
-                  />
-                </div>
-
-                {/* Orientation */}
-                <div className="mb-6">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Orientation
-                  </label>
-                  <div className="flex gap-4">
-                    <label className="flex items-center">
-                      <input
-                        type="radio"
-                        name="orientation"
-                        value="portrait"
-                        checked={orientation === "portrait"}
-                        onChange={(e) => setOrientation(e.target.value)}
-                        className="w-4 h-4 text-primary border-gray-300 focus:ring-primary"
-                      />
-                      <span className="ml-2 text-sm font-medium text-gray-700">Portrait</span>
-                    </label>
-                    <label className="flex items-center">
-                      <input
-                        type="radio"
-                        name="orientation"
-                        value="landscape"
-                        checked={orientation === "landscape"}
-                        onChange={(e) => setOrientation(e.target.value)}
-                        className="w-4 h-4 text-primary border-gray-300 focus:ring-primary"
-                      />
-                      <span className="ml-2 text-sm font-medium text-gray-700">Landscape</span>
-                    </label>
+                {filePreviewUrl && (
+                  <div className="card-actions justify-end mt-3">
+                    <button
+                      className="btn btn-primary gap-2"
+                      onClick={handlePrint}
+                      disabled={!selectedPrinter || isLoading}
+                    >
+                      {isLoading ? (
+                        <>
+                          <span className="loading loading-spinner"></span>
+                          Processing...
+                        </>
+                      ) : (
+                        <>
+                          Print Document
+                          <Printer className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
                   </div>
-                </div>
-              </div>
-
-              {/* Balance and Smart Price Section */}
-              <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200">
-                <div className="flex justify-between items-center mb-4">
-                  <div className="text-right">
-                    <p className="font-bold text-gray-700 text-xl">
-                      Balance: <span className="text-green-600">{availableCoins}</span> coins
-                    </p>
-                  </div>
-                </div>
-
-                <SmartPriceToggle
-                  paperSize={selectedSize}
-                  isColor={isColor}
-                  copies={copies}
-                  totalPages={totalPages}
-                  setTotalPages={setTotalPages}
-                  isSmartPriceEnabled={isSmartPriceEnabled}
-                  setIsSmartPriceEnabled={setIsSmartPriceEnabled}
-                  calculatedPrice={calculatedPrice}
-                  setCalculatedPrice={setCalculatedPrice}
-                  selectedPageOption={selectedPageOption}
-                  setSelectedPageOption={setSelectedPageOption}
-                  customPageRange={customPageRange}
-                  setCustomPageRange={setCustomPageRange}
-                  filePreviewUrl={filePreviewUrl}
-                />
+                )}
               </div>
             </div>
           </div>
-
-          {/* Right Side - Document Preview */}
-          <div className="w-1/2">
-            <div className="bg-gray-50 p-6 rounded-lg shadow-sm border border-gray-200 h-full">
-
-              <div className="bg-white border border-gray-200 rounded-lg w-full h-full">
-                <DocumentPreview
-                  fileUrl={filePreviewUrl}
-                  fileName={fileToUpload?.name}
-                  fileToUpload={fileToUpload}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Print Button */}
-        <div className="flex flex-col items-center mt-6 mb-4">
-          <button
-            onClick={handlePrint}
-            disabled={isLoading || !filePreviewUrl}
-            className={`px-8 py-3 text-white text-lg font-bold rounded-lg flex items-center justify-center transition-all ${isLoading || !filePreviewUrl
-              ? "bg-gray-400 cursor-not-allowed"
-              : "bg-primary hover:bg-primary-dark shadow-lg hover:shadow-xl"
-              }`}
-          >
-            {isLoading ? (
-              <>
-                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                {printStatus || "Processing..."}
-              </>
-            ) : (
-              <>
-                Print Document
-                <Printer className="ml-2" />
-              </>
-            )}
-          </button>
-
-          {/* Progress Bar */}
-          {isLoading && printProgress > 0 && (
-            <div className="w-full max-w-md mt-4">
-              <div className="bg-gray-300 rounded-full h-2.5">
-                <div
-                  className="bg-primary h-2.5 rounded-full transition-all duration-300"
-                  style={{ width: `${printProgress}%` }}
-                ></div>
-              </div>
-              <p className="text-sm text-gray-600 mt-1 text-center">{printStatus}</p>
-            </div>
-          )}
         </div>
       </div>
-    </ClientContainer>
+
+      {/* USB Guide Modal */}
+      {showModal && (
+        <div className="modal modal-open">
+          <div className="modal-box max-w-3xl">
+            <h3 className="font-bold text-lg mb-4">How to Print from USB</h3>
+            <div className="space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="badge badge-primary">1</div>
+                <p>Connect your USB drive - your files will appear automatically</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="badge badge-primary">2</div>
+                <p>Click on a file from your USB drive to select it</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="badge badge-primary">3</div>
+                <p>Choose your desired printer and print settings</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="badge badge-primary">4</div>
+                <p>Preview your document to make sure it looks correct</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="badge badge-primary">5</div>
+                <p>Check the smart price to ensure you have enough coins</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="badge badge-primary">6</div>
+                <p>Click the Print button to send your document to the printer</p>
+              </div>
+            </div>
+            <div className="modal-action">
+              <button className="btn" onClick={() => setShowModal(false)}>Close</button>
+            </div>
+          </div>
+          <div className="modal-backdrop" onClick={() => setShowModal(false)}></div>
+        </div>
+      )}
+    </div>
   );
 };
 

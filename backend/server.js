@@ -4,6 +4,9 @@ import cors from "cors";
 import BackendRoutes from "./routes/backend_route.js";
 import path from "path";
 import { fileURLToPath } from "url";
+import http from "http";
+// Import the USB detection service
+import { initUsbDetectionService, getConnectedDrives, refreshDriveFiles } from "./services/usbDetectionService.js";
 
 // For ES module __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -14,14 +17,14 @@ dotenv.config();
 const app = express();
 
 // Increase payload limit for file uploads
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ limit: "50mb", extended: true }));
+app.use(express.json({ limit: "100mb" }));
+app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
-// Configure CORS to allow all frontend origins
+// Configure CORS to allow all frontend origins including WebSocket
 app.use(cors({
   origin: true, // Allow any origin in development
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  allowedHeaders: ["Content-Type"],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Connection", "Upgrade", "Sec-WebSocket-Key", "Sec-WebSocket-Version"],
   credentials: true
 }));
 
@@ -29,14 +32,14 @@ app.use(cors({
 import fs from "fs";
 const uploadsDir = path.join(__dirname, "uploads");
 const tempDir = path.join(__dirname, "..", "temp");
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-  console.log(`Created uploads directory: ${uploadsDir}`);
-}
-if (!fs.existsSync(tempDir)) {
-  fs.mkdirSync(tempDir, { recursive: true });
-  console.log(`Created temp directory: ${tempDir}`);
-}
+const scansDir = path.join(__dirname, "printer", "scans");
+
+[uploadsDir, tempDir, scansDir].forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`Created directory: ${dir}`);
+  }
+});
 
 // Request logger middleware
 app.use((req, res, next) => {
@@ -64,6 +67,33 @@ app.use((req, res, next) => {
   next();
 });
 
+// Add USB detection API endpoints
+app.get("/api/usb-drives", (req, res) => {
+  try {
+    const drives = getConnectedDrives();
+    res.json({ status: "success", drives });
+  } catch (error) {
+    console.error("Error getting USB drives:", error);
+    res.status(500).json({ status: "error", message: "Failed to get USB drives" });
+  }
+});
+
+app.get("/api/usb-drives/:drivePath/refresh", async (req, res) => {
+  try {
+    const drivePath = req.params.drivePath;
+    const files = await refreshDriveFiles(drivePath);
+    
+    if (files === null) {
+      return res.status(404).json({ status: "error", message: "Drive not found" });
+    }
+    
+    res.json({ status: "success", files });
+  } catch (error) {
+    console.error("Error refreshing USB drive files:", error);
+    res.status(500).json({ status: "error", message: "Failed to refresh USB drive files" });
+  }
+});
+
 // Use default route
 app.use("/api", BackendRoutes);
 
@@ -71,11 +101,29 @@ app.get("/", (req, res) => {
   res.send("Welcome to the VendoPrint server");
 });
 
+// Create HTTP server with increased timeout
+const server = http.createServer(app);
+
+// Increase timeout for the server to 5 minutes for long-running operations
+server.timeout = 300000; // 5 minutes in milliseconds
+
+// Initialize USB detection service with our server (now using an async IIFE)
+(async () => {
+  try {
+    await initUsbDetectionService(server);
+    console.log("USB detection service started");
+  } catch (error) {
+    console.error("Error starting USB detection service:", error);
+  }
+})();
+ 
 // Use explicit port 5000 if not provided in env
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, "0.0.0.0", () => {
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📄 API endpoint: http://localhost:${PORT}/api`);
+  console.log(`⚙️ Server timeout set to ${server.timeout / 1000} seconds`);
+  console.log(`📀 USB detection active - WebSocket: ws://localhost:${PORT}`);
 });
 
 

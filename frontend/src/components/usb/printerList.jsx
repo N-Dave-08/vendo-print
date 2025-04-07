@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
+import { Printer, AlertCircle } from "lucide-react";
 
 const PrinterList = ({ selectedPrinter, setSelectedPrinter, onPrinterCapabilities }) => {
   const [printers, setPrinters] = useState([]);
@@ -7,18 +8,66 @@ const PrinterList = ({ selectedPrinter, setSelectedPrinter, onPrinterCapabilitie
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  // Function to check if a printer name is likely a virtual printer
+  const isVirtualPrinter = (printerName) => {
+    const virtualPrinterPatterns = [
+      'microsoft', 'pdf', 'xps', 'document writer', 'onedrive', 
+      'fax', 'print to', 'onenote', 'adobe pdf'
+    ];
+    
+    const lowerName = printerName.toLowerCase();
+    return virtualPrinterPatterns.some(pattern => lowerName.includes(pattern));
+  };
+
+  // Function to try to get printer status from multiple endpoints
+  const getPrinterStatus = async (printerName) => {
+    try {
+      // First try the capabilities endpoint
+      const response = await axios.get(`http://localhost:5000/api/printers/${encodeURIComponent(printerName)}/capabilities`);
+      if (response.data.status === 'success' && response.data.capabilities?.capabilities?.status) {
+        return response.data.capabilities.capabilities.status;
+      }
+      
+      // If no status in capabilities, try status endpoint directly
+      const statusResponse = await axios.get(`http://localhost:5000/api/printers/${encodeURIComponent(printerName)}/status`);
+      if (statusResponse.data.status) {
+        return statusResponse.data.status;
+      }
+      
+      return "Ready"; // Default if no status found
+    } catch (error) {
+      console.error('Error fetching printer status:', error);
+      return "Unknown";
+    }
+  };
+
   useEffect(() => {
     axios
       .get("http://localhost:5000/api/printers")
       .then((response) => {
-        setPrinters(response.data.printers);
+        const printerList = response.data.printers || [];
+        setPrinters(printerList);
 
         // Initialize status for all printers
         const statusObj = {};
-        response.data.printers.forEach(printer => {
-          statusObj[printer.name] = { status: "Unknown", loading: false };
+        printerList.forEach(printer => {
+          statusObj[printer.name] = { status: "Ready", loading: false };
         });
         setPrinterStatus(statusObj);
+        
+        // Auto-select first printer if printers are available and none is selected
+        if (printerList.length > 0 && (!selectedPrinter || selectedPrinter === "")) {
+          // Try to find a physical printer first
+          const physicalPrinters = printerList.filter(printer => !isVirtualPrinter(printer.name));
+          
+          if (physicalPrinters.length > 0) {
+            // Use the first physical printer
+            handlePrinterChange(physicalPrinters[0].name);
+          } else {
+            // Fall back to the first printer in the list if no physical printers found
+            handlePrinterChange(printerList[0].name);
+          }
+        }
       })
       .catch((error) => {
         setError("Failed to fetch printers");
@@ -28,6 +77,7 @@ const PrinterList = ({ selectedPrinter, setSelectedPrinter, onPrinterCapabilitie
 
   const handlePrinterChange = async (printerName) => {
     setSelectedPrinter(printerName);
+    
     if (printerName) {
       // Set loading state
       setPrinterStatus(prev => ({
@@ -37,13 +87,16 @@ const PrinterList = ({ selectedPrinter, setSelectedPrinter, onPrinterCapabilitie
 
       setLoading(true);
       try {
+        // Get printer status
+        const status = await getPrinterStatus(printerName);
+        
+        // Get printer capabilities
         const response = await axios.get(`http://localhost:5000/api/printers/${encodeURIComponent(printerName)}/capabilities`);
         if (response.data.status === 'success') {
           if (onPrinterCapabilities) {
             onPrinterCapabilities(response.data.capabilities);
           }
 
-          const status = response.data.capabilities.capabilities?.status || "Ready";
           setPrinterStatus(prev => ({
             ...prev,
             [printerName]: { status, loading: false }
@@ -62,68 +115,64 @@ const PrinterList = ({ selectedPrinter, setSelectedPrinter, onPrinterCapabilitie
     }
   };
 
-  // Get status indicator color
+  // Get status indicator class based on printer status
   const getStatusColor = (status) => {
-    if (!status) return "bg-gray-400";
+    if (!status) return "text-gray-400";
 
     status = status.toLowerCase();
-    if (status === "ready") return "bg-green-500";
-    if (status === "error") return "bg-red-500";
-    if (status === "offline") return "bg-red-500";
-    if (status === "printing") return "bg-blue-500";
-    return "bg-yellow-500"; // Default for other states
+    if (status === "ready") return "text-green-500";
+    if (status === "error") return "text-red-500";
+    if (status === "offline") return "text-red-500";
+    if (status === "printing") return "text-blue-500";
+    return "text-yellow-500"; // Default for other states
+  };
+
+  // Format the display for the UI
+  const formatStatus = (status) => {
+    if (!status || status.toLowerCase() === "unknown") return "Ready";
+    return status;
   };
 
   return (
     <div>
-      {error && <p className="text-red-500 text-sm mt-1">{error}</p>}
-
-      <div className="relative">
-        <select
-          value={selectedPrinter}
-          onChange={(e) => handlePrinterChange(e.target.value)}
-          className={`w-full px-3 py-2 pl-10 border rounded-md bg-white text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-primary ${loading ? 'opacity-50 cursor-wait' : ''}`}
-          disabled={loading}
-        >
-          <option value="">Select a printer...</option>
-          {Array.isArray(printers) && printers.length > 0 ? (
-            printers.map((printer, index) => (
-              <option key={index} value={printer.name}>
-                {printer.name}
-              </option>
-            ))
+      {/* Display selected printer without dropdown */}
+      <div className="border rounded-lg p-3 bg-base-100 flex items-center justify-between">
+        <div className="flex items-center">
+          <Printer className="h-5 w-5 mr-3 text-primary" />
+          {loading && !selectedPrinter ? (
+            <div className="flex items-center">
+              <span className="loading loading-spinner loading-xs mr-2"></span>
+              <span>Connecting to printer...</span>
+            </div>
+          ) : selectedPrinter ? (
+            <span className="font-medium">{selectedPrinter}</span>
           ) : (
-            <option value="">No printers available</option>
+            <span className="text-warning">No printer connected</span>
           )}
-        </select>
-
-        {/* Printer icon with status indicator */}
-        <div className="absolute left-3 top-1/2 transform -translate-y-1/2 flex items-center">
-          <div className="text-gray-600">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M5 4v3H4a2 2 0 00-2 2v3a2 2 0 002 2h1v2a2 2 0 002 2h6a2 2 0 002-2v-2h1a2 2 0 002-2V9a2 2 0 00-2-2h-1V4a2 2 0 00-2-2H7a2 2 0 00-2 2zm8 0H7v3h6V4zm0 8H7v4h6v-4z" clipRule="evenodd" />
-            </svg>
+        </div>
+        
+        {/* Status indicator */}
+        {selectedPrinter && printerStatus[selectedPrinter] && (
+          <div className="flex items-center gap-2">
+            <div className="badge" style={{backgroundColor: printerStatus[selectedPrinter].status.toLowerCase() === "ready" ? "#10b981" : "#f59e0b", color: "white"}}>
+              {printerStatus[selectedPrinter].loading || loading
+                ? "Checking..."
+                : `Status: ${formatStatus(printerStatus[selectedPrinter].status)}`}
+            </div>
           </div>
-        </div>
+        )}
       </div>
-
-      {/* Show printer status when one is selected */}
-      {selectedPrinter && printerStatus[selectedPrinter] && (
-        <div className="flex items-center mt-2">
-          <div className={`w-3 h-3 rounded-full mr-2 ${getStatusColor(printerStatus[selectedPrinter].status)}`}></div>
-          <span className="text-sm text-gray-700">
-            {printerStatus[selectedPrinter].loading || loading
-              ? "Checking status..."
-              : `Status: ${printerStatus[selectedPrinter].status || "Ready"}`}
-          </span>
+      
+      {/* Error message if present */}
+      {error && (
+        <div className="mt-2 px-3 py-2 bg-red-50 text-red-600 text-sm rounded flex items-center">
+          <AlertCircle className="w-4 h-4 mr-2" />
+          {error}
         </div>
-      )}
-
-      {loading && !selectedPrinter && (
-        <p className="text-sm text-gray-600 mt-1">Loading printer capabilities...</p>
       )}
     </div>
   );
 };
 
 export default PrinterList;
+

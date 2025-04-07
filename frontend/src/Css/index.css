@@ -1,3 +1,65 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+@plugin "daisyui";
+@plugin "daisyui/theme" {
+  name: "winter";
+  default: true;
+  color-scheme: light;
+  
+  /* Base colors - using the dark blue from logo as neutral */
+  --color-base-100: oklch(100% 0 0);  /* White */
+  --color-base-200: oklch(98% 0.01 240);  /* Very light blue */
+  --color-base-300: oklch(95% 0.02 240);  /* Light blue */
+  --color-base-content: oklch(23% 0.05 260);  /* Dark blue from logo */
+  
+  /* Primary - Dark blue from logo */
+  --color-primary: oklch(23% 0.05 260);
+  --color-primary-content: oklch(100% 0 0);
+  
+  /* Secondary - Medium blue */
+  --color-secondary: oklch(45% 0.1 250);
+  --color-secondary-content: oklch(100% 0 0);
+  
+  /* Accent - Yellow from star/crown */
+  --color-accent: oklch(85% 0.2 85);
+  --color-accent-content: oklch(23% 0.05 260);
+  
+  /* Neutral - Darker blue */
+  --color-neutral: oklch(20% 0.05 260);
+  --color-neutral-content: oklch(100% 0 0);
+  
+  /* Status colors */
+  --color-info: oklch(65% 0.2 220);
+  --color-info-content: oklch(100% 0 0);
+  --color-success: oklch(65% 0.2 140);
+  --color-success-content: oklch(100% 0 0);
+  --color-warning: oklch(80% 0.2 85);  /* Similar to accent yellow */
+  --color-warning-content: oklch(23% 0.05 260);
+  --color-error: oklch(65% 0.3 30);
+  --color-error-content: oklch(100% 0 0);
+
+  /* Border radius - based on the circular logo design */
+  --radius-box: 1rem;        /* Large elements like cards */
+  --radius-field: 0.75rem;   /* Form fields */
+  --radius-selector: 9999px; /* Full circular elements like buttons */
+  
+}
+
+
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+}

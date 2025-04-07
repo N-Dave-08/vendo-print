@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FaArrowLeft, FaPrint } from 'react-icons/fa';
+import { ArrowLeft, Printer, X } from "lucide-react";
 import { ezlogo } from '../assets/Icons';
 
 import SmartPriceToggle from "../components/xerox/smart_price";
 import PrinterList from "../components/xerox/printerList";
 import SelectColor from "../components/usb/select_color";
+import PrintSettings from "../components/common/PrintSettings";
 
 import { realtimeDb, storage } from '../../firebase/firebase_config';
 import { ref as dbRef, get, update, set, push } from "firebase/database";
@@ -32,8 +33,9 @@ const Xerox = () => {
   const [selectedPrinter, setSelectedPrinter] = useState("");
   const [printerCapabilities, setPrinterCapabilities] = useState(null);
   const [copies, setCopies] = useState(1);
-  const [selectedSize, setSelectedSize] = useState("Short Bond");
+  const [selectedSize, setSelectedSize] = useState("Short Bond"); // Always use Short Bond
   const [isColor, setIsColor] = useState(false);
+  const [orientation, setOrientation] = useState("portrait"); // Add orientation for PrintSettings component
 
   // Print status for progress tracking
   const [printStatus, setPrintStatus] = useState("");
@@ -65,6 +67,23 @@ const Xerox = () => {
     };
   }, []);
 
+  // Add this useEffect for price calculation
+  useEffect(() => {
+    // Calculate price whenever relevant factors change
+    if (!filePreviewUrl) {
+      setCalculatedPrice(0);
+      return;
+    }
+
+    const basePrice = isColor ? 12 : 10;
+    const totalCost = basePrice * copies * totalPages;
+    
+    // Apply smart pricing discount if enabled
+    const finalPrice = isSmartPriceEnabled ? Math.round(totalCost * 0.85) : totalCost;
+    
+    setCalculatedPrice(finalPrice);
+  }, [filePreviewUrl, copies, totalPages, isColor, isSmartPriceEnabled]);
+
   const handleScan = async () => {
     // Only proceed if the user explicitly initiated the scan
     if (!userInitiatedRef.current && event && event.type !== 'click') {
@@ -75,28 +94,52 @@ const Xerox = () => {
     userInitiatedRef.current = false; // Reset the flag
     setIsLoading(true);
     setError("");
-    setFilePreviewUrl("");
-    setLocalPreviewUrl("");
+    // Don't clear existing preview URLs until we have a new one
+    const previousLocalUrl = localPreviewUrl;
     setUploadProgress(0);
 
     try {
       // First check if scanner is available
-      await axios.get('http://localhost:5000/api/xerox/check-scanner');
+      await axios.get('http://localhost:5000/api/xerox/check-scanner', { timeout: 10000 });
 
-      // Then get the preview
+      // Then get the preview - increase timeout to 60 seconds for large files
+      console.log("Starting scan preview request...");
       const response = await axios.get('http://localhost:5000/api/xerox/preview', {
-        responseType: 'blob'
+        responseType: 'blob',
+        timeout: 120000, // Increase to 120 seconds for larger scans
+        maxContentLength: 20971520, // 20MB max file size
+        maxBodyLength: 20971520 // 20MB max body size
       });
 
+      console.log("Scan preview received, size:", response.data.size, "bytes");
+      
+      // Revoke the previous object URL to prevent memory leaks
+      if (previousLocalUrl) {
+        URL.revokeObjectURL(previousLocalUrl);
+      }
+      
       // Create local preview URL for the UI
       const previewUrl = URL.createObjectURL(response.data);
+      console.log("Created preview URL:", previewUrl);
       setLocalPreviewUrl(previewUrl);
 
       // Upload to Firebase Storage
       await uploadScanToFirebase(response.data);
     } catch (error) {
-      setError(error.response?.data?.message || 'Failed to scan document. Please check if the scanner is connected and powered on.');
       console.error('Scan error:', error);
+      
+      // Handle different error types
+      if (error.code === 'ECONNABORTED' || !error.response) {
+        setError('Connection to the scanner timed out. The scan might be too large or the system is busy. Please try again.');
+      } else if (error.message.includes('Network Error')) {
+        setError('Network error. Please check if the scanner server is running and connected.');
+      } else {
+        setError(
+          error.response?.data?.message || 
+          'Failed to scan document. Please check if the scanner is connected and powered on.'
+        );
+      }
+      
       setIsLoading(false);
     }
   };
@@ -108,12 +151,27 @@ const Xerox = () => {
     const fileName = `scan_${timestamp}.jpg`;
     const storageRef = ref(storage, `uploads/${fileName}`);
 
+    // Check if blob data is valid
+    if (!blobData || blobData.size === 0) {
+      console.error("Invalid blob data for upload");
+      setError("Invalid scan data for upload.");
+      setIsLoading(false);
+      return;
+    }
+
+    console.log(`Uploading scan to Firebase: ${fileName}, size: ${blobData.size} bytes`);
+
+    // Determine the correct MIME type based on the data
+    const contentType = blobData.type || 'image/jpeg';
+    
     // Set metadata to ensure files are publicly readable
     const metadata = {
-      contentType: 'image/jpeg',
+      contentType: contentType,
       customMetadata: {
         'public': 'true',
-        'source': 'scanner'
+        'source': 'scanner',
+        'timestamp': timestamp.toString(),
+        'fileSize': blobData.size.toString()
       }
     };
 
@@ -126,19 +184,21 @@ const Xerox = () => {
           // Handle progress
           const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
           setUploadProgress(progress);
-          console.log('Upload progress:', progress);
+          console.log('Upload progress:', progress.toFixed(2) + '%');
         },
         (error) => {
-          // Handle error
+          // Handle upload error
           console.error("Upload failed:", error);
-          setError("Failed to upload scanned document.");
+          setError("Failed to upload scanned document to storage.");
           setIsLoading(false);
         },
         async () => {
           // Handle success
           try {
+            console.log("Upload completed, getting download URL...");
             const url = await getDownloadURL(uploadTask.snapshot.ref);
             setFilePreviewUrl(url);
+            console.log("Download URL received:", url);
 
             // Record scan in Firebase database
             const scanRef = await push(dbRef(realtimeDb, "uploadedFiles"));
@@ -147,9 +207,12 @@ const Xerox = () => {
               fileUrl: url,
               totalPages: 1,
               uploadedAt: new Date().toISOString(),
-              uploadSource: "scanner"
+              uploadSource: "scanner",
+              contentType: contentType,
+              fileSize: blobData.size
             });
 
+            console.log("Scan recorded in database with ID:", scanRef.key);
             setIsLoading(false);
           } catch (error) {
             console.error("Error getting download URL:", error);
@@ -270,6 +333,7 @@ const Xerox = () => {
       // Continue with API call in the background
       const printJob = {
         jobId: printJobId,
+        printJobId: printJobId,
         fileName: "Scanned Document",
         fileUrl: filePreviewUrl, // Using the Firebase Storage URL
         printerName: selectedPrinter,
@@ -277,7 +341,7 @@ const Xerox = () => {
         selectedSize,
         isColor,
         totalPages,
-        fileType: "jpg", // Explicitly set the file type as jpg for scanned documents
+        fileType: "jpeg", // Change from 'jpg' to 'jpeg' to match standard MIME type
         contentType: "image/jpeg",  // Add MIME type information
         printMethod: "direct" // Request direct printing method
       };
@@ -288,7 +352,9 @@ const Xerox = () => {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(printJob)
+        body: JSON.stringify(printJob),
+        // Add timeout to avoid hanging requests
+        signal: AbortSignal.timeout(30000)
       })
         .then(response => {
           if (!response.ok) {
@@ -324,200 +390,146 @@ const Xerox = () => {
   };
 
   return (
-    <ClientContainer className="p-4">
-
-      {/* Main Box Container */}
-      <div className="flex flex-col w-full h-full bg-gray-200 rounded-lg shadow-md border-4 border-[#31304D] p-6 space-x-4 relative">
-        {/* Top Section */}
-        <div className="flex w-full space-x-6">
-          {/* Left Side */}
-          <div className="w-1/2 flex flex-col">
-            <div className="flex items-center">
-              <button
-                className="w-10 h-10 bg-gray-200 text-[#31304D] flex items-center justify-center rounded-lg border-2 border-[#31304D] mr-4"
-                onClick={() => navigate(-1)}
-              >
-                <FaArrowLeft className="text-2xl text-[#31304D]" />
-              </button>
-              <p className="text-3xl font-bold text-[#31304D]">Xerox</p>
+    <div className="h-screen overflow-hidden flex flex-col bg-base-200">
+      <div className="container mx-auto px-4 py-4 flex flex-col h-full">
+        {/* Page Header */}
+        <div className="flex items-center gap-3 mb-3">
+          <button
+            className="btn btn-circle btn-ghost btn-sm"
+            onClick={() => navigate(-1)}
+            aria-label="Go back"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <h1 className="text-2xl font-bold text-primary">Xerox</h1>
+          
+          {/* Balance Display - moved to header */}
+          <div className="ml-auto">
+            <div className="badge badge-lg badge-primary text-base-100 font-bold">
+              Inserted coins: {availableCoins}
             </div>
+          </div>
+        </div>
 
-            {/* Print Settings */}
-            <div className="mt-6 space-y-4">
-              <p className="mt-3 font-bold text-gray-700 text-xl">
-                Inserted coins: {availableCoins}
-              </p>
-
-              {/* Printer Selection */}
-              <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Select Printer
-                </label>
-                <PrinterList
-                  selectedPrinter={selectedPrinter}
-                  setSelectedPrinter={setSelectedPrinter}
-                  onPrinterCapabilities={setPrinterCapabilities}
-                />
-              </div>
-
-              {/* Copies */}
-              <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Copies
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={copies}
-                  onChange={(e) => setCopies(parseInt(e.target.value) || 1)}
-                  className="w-full px-3 py-2 border rounded-md bg-white text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-[#31304D]"
-                />
-              </div>
-
-              {/* Paper Size */}
-              <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Paper Size
-                </label>
-                <select
-                  value={selectedSize}
-                  onChange={(e) => setSelectedSize(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-md bg-white text-gray-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-[#31304D]"
-                >
-                  <option value="Short Bond">Short Bond (8.5 x 11)</option>
-                  <option value="A4">A4 (8.3 x 11.7)</option>
-                  <option value="Long Bond">Long Bond (8.5 x 14)</option>
-                </select>
-              </div>
-
-              {/* Color Selection */}
-              <div className="mt-4">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Print Mode
-                </label>
-                <SelectColor
-                  isColor={isColor}
-                  setIsColor={setIsColor}
-                  printerCapabilities={printerCapabilities}
-                />
-              </div>
-
-              <SmartPriceToggle
+        {/* Main Content Area - with proper overflow handling */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 overflow-hidden">
+          {/* Left Column - Settings with own scrollbar */}
+          <div className="overflow-y-auto pr-2 pb-2">
+            <div className="flex flex-col gap-4">
+              {/* Use the reusable PrintSettings component */}
+              <PrintSettings 
+                selectedPrinter={selectedPrinter}
+                setSelectedPrinter={setSelectedPrinter}
+                printerCapabilities={printerCapabilities}
+                setPrinterCapabilities={setPrinterCapabilities}
                 copies={copies}
+                setCopies={setCopies}
+                isColor={isColor}
+                setIsColor={setIsColor}
+                orientation={orientation}
+                setOrientation={setOrientation}
+                filePreviewUrl={filePreviewUrl}
+                totalPages={totalPages}
                 isSmartPriceEnabled={isSmartPriceEnabled}
                 setIsSmartPriceEnabled={setIsSmartPriceEnabled}
                 calculatedPrice={calculatedPrice}
-                totalPages={totalPages}
                 setCalculatedPrice={setCalculatedPrice}
-                filePreviewUrl={filePreviewUrl || localPreviewUrl}
               />
             </div>
           </div>
 
-          {/* Right Side - Preview */}
-          <div className="w-1/2">
-            <div className="bg-white rounded-lg p-4 h-full flex flex-col items-center justify-center relative">
-              {error && (
-                <div className="text-red-500 mb-4 text-center">
-                  {error}
-                </div>
-              )}
-              {localPreviewUrl ? (
-                <>
-                  <img
-                    src={localPreviewUrl}
-                    alt="Scanned Preview"
-                    className="max-w-full max-h-[400px] object-contain"
-                  />
-                  {isLoading && uploadProgress < 100 && (
-                    <div className="w-full mt-2">
-                      <div className="bg-gray-200 rounded-full h-2 mb-1">
-                        <div
-                          className="bg-blue-600 h-2 rounded-full transition-all"
-                          style={{ width: `${uploadProgress}%` }}
+          {/* Right Column - Document Preview & Scan Button with own scrollbar */}
+          <div className="overflow-y-auto pl-2 pb-2">
+            <div className="card bg-base-100 shadow-sm h-full flex flex-col">
+              <div className="card-body p-4 flex-1 flex flex-col overflow-hidden">
+                {error && (
+                  <div className="alert alert-error mb-2 text-sm">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    <span>{error}</span>
+                  </div>
+                )}
+
+                <div className="flex-1 flex flex-col items-center justify-center bg-base-200 rounded-lg p-4 overflow-hidden">
+                  {localPreviewUrl ? (
+                    <div className="relative w-full h-full flex flex-col">
+                      <div className="absolute top-2 right-2 z-10">
+                        <button 
+                          className="btn btn-circle btn-sm btn-error" 
+                          onClick={clearScannedDocument}
+                          aria-label="Clear scanned document"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                      <div className="flex-1 overflow-hidden rounded-lg border border-base-300">
+                        <img
+                          src={localPreviewUrl}
+                          alt="Scanned Document"
+                          className="w-full h-full object-contain"
                         />
                       </div>
-                      <p className="text-xs text-center text-gray-500">Uploading scan... {Math.round(uploadProgress)}%</p>
+                    </div>
+                  ) : (
+                    <div className="text-center p-4">
+                      <p className="text-lg mb-4 text-base-content/70">No document scanned yet</p>
+                      <button
+                        className="btn btn-primary gap-2"
+                        onClick={initiateUserScan}
+                        disabled={isLoading}
+                      >
+                        {isLoading ? (
+                          <>
+                            <span className="loading loading-spinner"></span>
+                            Scanning...
+                          </>
+                        ) : (
+                          <>
+                            Scan Document
+                          </>
+                        )}
+                      </button>
                     </div>
                   )}
-                  <div className="mt-4 flex space-x-4">
+                </div>
+
+                {localPreviewUrl && (
+                  <div className="card-actions justify-end mt-3">
                     <button
-                      onClick={initiateUserScan}
-                      disabled={isLoading}
-                      className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600"
+                      className="btn btn-primary gap-2"
+                      onClick={handlePrint}
+                      disabled={isLoading || !filePreviewUrl}
                     >
-                      {isLoading ? "Scanning..." : "Scan Again"}
-                    </button>
-                    <button
-                      onClick={clearScannedDocument}
-                      className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600"
-                    >
-                      Clear
+                      {isLoading ? (
+                        <>
+                          <span className="loading loading-spinner"></span>
+                          Processing...
+                        </>
+                      ) : (
+                        <>
+                          Print Document
+                          <Printer className="w-4 h-4" />
+                        </>
+                      )}
                     </button>
                   </div>
-                </>
-              ) : (
-                <div className="text-center text-gray-500">
-                  <p className="mb-4">No document scanned yet</p>
-                  <button
-                    onClick={initiateUserScan}
-                    disabled={isLoading}
-                    className="px-6 py-3 bg-[#31304D] text-white text-lg font-bold rounded-lg hover:bg-opacity-90"
-                  >
-                    {isLoading ? "Scanning..." : "Scan Document"}
-                  </button>
-                </div>
-              )}
+                )}
+
+                {uploadProgress > 0 && uploadProgress < 100 && (
+                  <div className="mt-2">
+                    <progress
+                      className="progress progress-primary w-full"
+                      value={uploadProgress}
+                      max="100"
+                    ></progress>
+                    <p className="text-xs mt-1 text-center">{uploadProgress.toFixed(0)}% uploaded</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
-
-        {/* Print Button */}
-        <div className="flex flex-col items-center mt-6 mb-4">
-          <button
-            onClick={handlePrint}
-            disabled={isLoading || !filePreviewUrl || uploadProgress < 100}
-            className={`px-8 py-3 text-white text-lg font-bold rounded-lg flex items-center justify-center transition-all ${isLoading || !filePreviewUrl || uploadProgress < 100
-              ? "bg-gray-400 cursor-not-allowed"
-              : "bg-[#31304D] hover:bg-opacity-90 shadow-lg hover:shadow-xl"
-              }`}
-          >
-            {isLoading ? (
-              <>
-                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                {printStatus || "Processing..."}
-              </>
-            ) : (
-              <>
-                Print Document
-                <FaPrint className="ml-2" />
-              </>
-            )}
-          </button>
-
-          {!isLoading && localPreviewUrl && uploadProgress < 100 && (
-            <p className="text-sm text-amber-600 mt-2">Upload in progress... Please wait until complete before printing.</p>
-          )}
-
-          {/* Progress Bar */}
-          {isLoading && printProgress > 0 && (
-            <div className="w-full max-w-md mt-4">
-              <div className="bg-gray-300 rounded-full h-2.5">
-                <div
-                  className="bg-[#31304D] h-2.5 rounded-full transition-all duration-300"
-                  style={{ width: `${printProgress}%` }}
-                ></div>
-              </div>
-              <p className="text-sm text-gray-600 mt-1 text-center">{printStatus}</p>
-            </div>
-          )}
-        </div>
       </div>
-    </ClientContainer>
+    </div>
   );
 };
 

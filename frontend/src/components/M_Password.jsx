@@ -21,7 +21,7 @@ const M_Password = ({ closeModal }) => {
 
   };
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-opacity-30 backdrop-blur-sm z-50">
+    <div className="fixed inset-0 flex items-center justify-center bg-opacity-30 backdrop-blur-xs z-50">
       <div className="bg-white p-6 rounded-lg shadow-lg w-96 relative">
         {/* Close Button */}
         <button 
@@ -36,7 +36,7 @@ const M_Password = ({ closeModal }) => {
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="w-full p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#31304D]"
+          className="w-full p-2 border border-gray-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-[#31304D]"
           placeholder="Enter your password"
         />
         {error && <p className="text-red-500 text-sm mt-2">{error}</p>}

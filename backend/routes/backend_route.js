@@ -84,6 +84,7 @@ BackendRoutes.get('/xerox/preview', async (req, res) => {
   lastScanTime = now;
   console.log('Starting preview scan...');
   let outputPath = null;
+  let jpegPath = null;
 
   try {
     console.log('Checking scanner availability...');
@@ -109,24 +110,123 @@ BackendRoutes.get('/xerox/preview', async (req, res) => {
       throw new Error('Scan failed - no output file generated');
     }
 
-    res.sendFile(outputPath, (err) => {
+    // Convert BMP to JPEG using ImageMagick
+    jpegPath = outputPath.replace('.bmp', '.jpg');
+    console.log('Converting BMP to JPEG:', jpegPath);
+    
+    // Using PowerShell to call System.Drawing which is available on Windows
+    const convertCmd = `
+      powershell.exe -Command "
+        Add-Type -AssemblyName System.Drawing
+        
+        try {
+          # Wait a moment to ensure file is ready for read access
+          Start-Sleep -Seconds 1
+          
+          # Make sure the source file exists
+          if (!(Test-Path '${outputPath}')) {
+            Write-Error 'Source BMP file does not exist'
+            exit 1
+          }
+          
+          # Get file info
+          $fileInfo = Get-Item '${outputPath}'
+          Write-Output ('Source BMP file size: ' + $fileInfo.Length + ' bytes')
+          
+          $bitmap = New-Object System.Drawing.Bitmap '${outputPath}'
+          Write-Output ('Loaded bitmap: ' + $bitmap.Width + 'x' + $bitmap.Height)
+          
+          $encoderParam = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, 85)
+          $encoderParams = New-Object System.Drawing.Imaging.EncoderParameters(1)
+          $encoderParams.Param[0] = $encoderParam
+          $jpegCodecInfo = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+          
+          $bitmap.Save('${jpegPath}', $jpegCodecInfo, $encoderParams)
+          $bitmap.Dispose()
+          
+          # Verify the output file was created
+          if (Test-Path '${jpegPath}') {
+            $jpegInfo = Get-Item '${jpegPath}'
+            Write-Output ('JPEG file created: ' + $jpegInfo.Length + ' bytes')
+            exit 0
+          } else {
+            Write-Error 'JPEG file was not created'
+            exit 1
+          }
+        } catch {
+          Write-Error $_
+          exit 1
+        }
+      "
+    `;
+
+    await new Promise((resolve, reject) => {
+      exec(convertCmd, { timeout: 30000 }, (error, stdout, stderr) => {
+        if (error) {
+          console.error('Image conversion error:', stderr);
+          // If conversion fails, fall back to original BMP
+          resolve(outputPath);
+        } else {
+          console.log('Image converted successfully');
+          // Only delete BMP file after confirming JPEG exists
+          if (fs.existsSync(jpegPath)) {
+            try {
+              fs.unlinkSync(outputPath);
+              console.log('Original BMP file deleted');
+            } catch (err) {
+              console.error('Error deleting BMP file:', err);
+            }
+            resolve(jpegPath);
+          } else {
+            console.log('JPEG file not found, keeping BMP file');
+            resolve(outputPath);
+          }
+        }
+      });
+    });
+
+    // Send the JPEG if it exists, otherwise fall back to BMP
+    const fileToSend = fs.existsSync(jpegPath) ? jpegPath : outputPath;
+    console.log(`Sending file: ${fileToSend}`);
+
+    // Verify file existence before sending
+    if (!fs.existsSync(fileToSend)) {
+      console.error(`File to send does not exist: ${fileToSend}`);
+      throw new Error('File to send does not exist');
+    }
+
+    // Set appropriate cache control headers to prevent caching issues
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
+
+    // Send the file and handle cleanup
+    res.sendFile(fileToSend, (err) => {
       if (err) {
         console.error('Error sending file:', err);
+      } else {
+        console.log(`File sent successfully: ${fileToSend}`);
       }
       // Clean up after sending
-      if (fs.existsSync(outputPath)) {
-        fs.unlinkSync(outputPath);
+      if (fileToSend && fs.existsSync(fileToSend)) {
+        fs.unlinkSync(fileToSend);
+        console.log(`Cleaned up file: ${fileToSend}`);
       }
     });
   } catch (error) {
     console.error('Error during preview scan:', error);
-    if (outputPath && fs.existsSync(outputPath)) {
-      try {
-        fs.unlinkSync(outputPath);
-      } catch (cleanupError) {
-        console.error('Error during cleanup:', cleanupError);
+    // Clean up any temporary files
+    [outputPath, jpegPath].forEach(filePath => {
+      if (filePath && fs.existsSync(filePath)) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch (cleanupError) {
+          console.error('Error during cleanup:', cleanupError);
+        }
       }
-    }
+    });
+    
     res.status(500).json({
       status: 'error',
       message: error.message || 'Failed to generate preview.'
@@ -527,6 +627,100 @@ BackendRoutes.get('/proxy-pdf', async (req, res) => {
       status: 'error',
       message: error.message
     });
+  }
+});
+
+// Add route for updating print job status
+BackendRoutes.post('/update-print-job', async (req, res) => {
+  try {
+    const { printJobId, status, progress, statusMessage } = req.body;
+
+    if (!printJobId) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Missing print job ID'
+      });
+    }
+
+    // Import Firebase Realtime Database functions
+    const { getDatabase, ref, update } = await import('firebase/database');
+    const db = getDatabase();
+    
+    // Update the print job in Firebase
+    const printJobRef = ref(db, `printJobs/${printJobId}`);
+    const updates = {};
+    
+    if (status) updates.status = status;
+    if (progress !== undefined) updates.progress = progress;
+    if (statusMessage) updates.statusMessage = statusMessage;
+    updates.lastUpdated = Date.now();
+    
+    await update(printJobRef, updates);
+    
+    res.json({
+      status: 'success',
+      message: 'Print job updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating print job:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message || 'Failed to update print job'
+    });
+  }
+});
+
+// Add this route to read files from USB drives
+BackendRoutes.get('/read-file', async (req, res) => {
+  try {
+    const filePath = req.query.path;
+    
+    if (!filePath) {
+      return res.status(400).json({ error: 'No file path provided' });
+    }
+    
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    
+    // Get file stats to determine MIME type
+    const stats = fs.statSync(filePath);
+    
+    if (!stats.isFile()) {
+      return res.status(400).json({ error: 'Path is not a file' });
+    }
+    
+    // Determine MIME type based on file extension
+    const ext = path.extname(filePath).toLowerCase();
+    let mimeType = 'application/octet-stream'; // Default MIME type
+    
+    const mimeTypes = {
+      '.pdf': 'application/pdf',
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.xls': 'application/vnd.ms-excel',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    };
+    
+    if (mimeTypes[ext]) {
+      mimeType = mimeTypes[ext];
+    }
+    
+    // Set appropriate headers
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', `inline; filename="${path.basename(filePath)}"`);
+    
+    // Stream the file to the response
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+    
+  } catch (error) {
+    console.error('Error reading file:', error);
+    res.status(500).json({ error: 'Failed to read file' });
   }
 });
 

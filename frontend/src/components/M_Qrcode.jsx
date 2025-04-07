@@ -11,7 +11,7 @@ const M_Qrcode = ({ onClick, size = 200 }) => {
   return (
     <div className="flex flex-col items-center">
       <div
-        className="w-56 h-56 bg-white flex items-center justify-center mt-4 rounded-lg shadow-lg border-2 border-[#31304D] p-2 cursor-pointer transform transition-transform hover:scale-105"
+        className="card card-bordered border-primary p-2 bg-base-100 shadow-xl cursor-pointer hover:scale-105 transition-transform w-56 h-56 flex items-center justify-center"
         onClick={onClick}
       >
         <QRCodeCanvas
@@ -21,7 +21,9 @@ const M_Qrcode = ({ onClick, size = 200 }) => {
           includeMargin={true} // Add quiet zone margin
         />
       </div>
-
+      <div className="mt-4 text-center">
+        <p className="text-sm text-base-content opacity-70">Scan to upload files</p>
+      </div>
     </div>
   );
 };

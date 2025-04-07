@@ -6,6 +6,7 @@ import Xerox from "./Pages/Xerox";
 import Settings from "./Pages/Admin";
 import Usb from "./Pages/Usb";
 import QRUpload from "./Pages/Qr_Files";
+import PrintQueue from "./Pages/PrintQueue";
 import FileUpload from "./components/qr/file_upload";
 
 const App = () => {
@@ -19,6 +20,7 @@ const App = () => {
           <Route path="/settings" element={<Settings />} />
           <Route path="/usb" element={<Usb />} />
           <Route path="/qr" element={<QRUpload />} />
+          <Route path="/print-queue" element={<PrintQueue />} />
           <Route path="/file-upload" element={<FileUpload />} />
         </Route>
       </Routes>

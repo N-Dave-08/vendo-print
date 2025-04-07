@@ -8,7 +8,7 @@ function FAQItem({ question, answer }) {
   return (
     <div className="border-b last:border-b-0">
       <button
-        className="w-full py-4 px-6 flex justify-between items-center focus:outline-none"
+        className="w-full py-4 px-6 flex justify-between items-center focus:outline-hidden"
         onClick={() => setIsOpen(!isOpen)}
       >
         <span className="font-medium text-left">{question}</span>

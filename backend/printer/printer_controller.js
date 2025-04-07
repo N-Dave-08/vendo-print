@@ -20,19 +20,102 @@ import { firebaseConfig } from '../firebase/firebase-config.js';
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 
+// Keep track of recent print jobs to prevent duplicates
+const recentPrintJobs = new Map();
+const completedPrintJobs = new Set(); // Track completed jobs to prevent restart
+const activePdfPrintJobs = new Set(); // Track active PDF print jobs
+const PRINT_JOB_TRACKING_DURATION = 60000; // 60 seconds
+const COMPLETED_JOB_TRACKING_DURATION = 300000; // 5 minutes
+
+// Track print job to prevent duplicates
+const trackPrintJob = (printJobId, fileName) => {
+  if (!printJobId || !fileName) return false;
+  
+  // If this job has already been completed, don't process it again
+  if (completedPrintJobs.has(printJobId)) {
+    console.log(`Job ${printJobId} has already completed, skipping duplicate processing`);
+    return true;
+  }
+  
+  const jobKey = `${fileName}-${printJobId}`;
+  const now = Date.now();
+  
+  // Check if we've printed this file recently
+  for (const [key, timestamp] of recentPrintJobs.entries()) {
+    // Clean up old entries
+    if (now - timestamp > PRINT_JOB_TRACKING_DURATION) {
+      recentPrintJobs.delete(key);
+      continue;
+    }
+    
+    // If this is the same file and it was printed recently, prevent duplicate
+    if (key.startsWith(`${fileName}-`) && key !== jobKey) {
+      console.log(`Preventing duplicate print of ${fileName} - recently printed with job ${key}`);
+      return true;
+    }
+  }
+  
+  // Record this print job
+  recentPrintJobs.set(jobKey, now);
+  return false;
+};
+
+// Periodically clean up completed jobs set
+setInterval(() => {
+  const now = Date.now();
+  const expiredJobs = [];
+  
+  // Check each completed print job
+  for (const jobId of completedPrintJobs) {
+    // If we have a timestamp for when the job was marked complete
+    const timestamp = recentPrintJobs.get(`completed-${jobId}`);
+    if (timestamp && now - timestamp > COMPLETED_JOB_TRACKING_DURATION) {
+      expiredJobs.push(jobId);
+    }
+  }
+  
+  // Remove expired jobs from tracking
+  for (const jobId of expiredJobs) {
+    completedPrintJobs.delete(jobId);
+    recentPrintJobs.delete(`completed-${jobId}`);
+  }
+  
+  if (expiredJobs.length > 0) {
+    console.log(`Cleaned up ${expiredJobs.length} expired completed job entries`);
+  }
+}, 60000); // Check every minute
+
 // Helper function to update print progress
 const updatePrintProgress = async (printJobId, progress, status) => {
   if (!printJobId) return;
 
-  try {
-    await update(dbRef(db, `files/${printJobId}`), {
-      progress,
-      printStatus: status,
-      status: progress >= 100 ? "Done" : "Processing"
-    });
-  } catch (error) {
-    console.error("Error updating print progress:", error);
+  // Convert to string if status is a string; otherwise pass undefined for status
+  const statusText = typeof status === 'string' ? status : undefined;
+  
+  // Convert progress value to a descriptive status message if no status message provided
+  let statusMessage = statusText;
+  
+  // If we have a status but it's not a well-formatted message
+  if (statusText && !statusText.endsWith('...') && !statusText.includes('Error:')) {
+    statusMessage = `${statusText}...`;
   }
+  
+  // Determine the status code based on progress or provided status
+  let statusCode = undefined;
+  if (typeof status === 'string' && (status === 'pending' || status === 'processing' || status === 'printing' || status === 'error' || status === 'completed')) {
+    statusCode = status;
+  } else if (progress >= 100) {
+    statusCode = "completed";
+  } else if (progress === 0 && statusText && statusText.toLowerCase().includes('error')) {
+    statusCode = "error";
+  } else if (progress > 75) {
+    statusCode = "printing";
+  } else if (progress > 0) {
+    statusCode = "processing";
+  }
+  
+  // Call the new function with the determined parameters
+  return updatePrintJobProgress(printJobId, progress, statusCode, statusMessage);
 };
 
 const execPromise = util.promisify(exec);
@@ -68,26 +151,6 @@ export const getPrintersHandler = async (req, res) => {
     res.json({ status: 'success', printers });
   } catch (error) {
     res.status(500).json({ status: 'error', error: error.message });
-  }
-};
-
-
-export const printFileWithSumatra = async (filePath, printerName, isColor) => {
-  let command = `"C:\\Program Files\\SumatraPDF\\SumatraPDF.exe" -print-to "${printerName}"`;
-  if (isColor === false) {
-    command += ' -print-settings "monochrome"';
-  }
-  command += ` "${filePath}"`;
-
-  try {
-    const { stdout, stderr } = await execPromise(command);
-    if (stderr) {
-      throw new Error(stderr);
-    }
-    return stdout;
-  } catch (error) {
-    console.error('Error printing file with Sumatra:', error);
-    throw error;
   }
 };
 
@@ -175,7 +238,7 @@ export const printFileWithOSCommands = async (filePath, printerName, isColor, op
             # Set color mode (1 = Color, 2 = Monochrome)
             # If the document has color and user selected color printing, use color mode
             $colorMode = 2; # Default to Monochrome
-            if (${isColor} -eq $true) {
+            if (${isColor}) {
               $colorMode = 1; # Use Color mode
               Write-Host 'Setting color mode to: Color (user requested)';
             } else {
@@ -229,7 +292,7 @@ export const printFileWithOSCommands = async (filePath, printerName, isColor, op
     }
     
     # Now we can terminate the process
-    ForEach-Object { 
+    if ($printProcess) {
       Write-Host 'Stopping print process ID:' $printProcess.Id;
       $printProcess | Stop-Process;
     }
@@ -262,8 +325,10 @@ export const printFileWithOSCommands = async (filePath, printerName, isColor, op
     # Restore original default printer
     Start-Sleep -Seconds 2;
     try {
-      $wshNetwork.SetDefaultPrinter($defaultPrinter);
-      Write-Host 'Restored default printer to:' $defaultPrinter;
+      if ($defaultPrinter) {
+        $wshNetwork.SetDefaultPrinter($defaultPrinter);
+        Write-Host 'Restored default printer to:' $defaultPrinter;
+      }
     } catch {
       Write-Warning 'Could not restore default printer: $_';
     }
@@ -838,6 +903,87 @@ try {
 };
 
 /**
+ * Download a file from a URL to a local file path
+ * @param {string} url - The URL of the file to download
+ * @param {string} outputPath - The local path to save the file to
+ * @returns {Promise<void>} - A promise that resolves when the download is complete
+ */
+const downloadFile = async (url, outputPath) => {
+  try {
+    const response = await axios({
+      method: 'GET',
+      url: url,
+      responseType: 'stream'
+    });
+
+    const writer = fs.createWriteStream(outputPath);
+    response.data.pipe(writer);
+
+    return new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    });
+  } catch (error) {
+    console.error(`Error downloading file from ${url}:`, error.message);
+    throw error;
+  }
+};
+
+// Function to update print job progress in Firebase
+const updatePrintJobProgress = async (jobId, progress, status = "", statusMessage = "") => {
+  if (!jobId) {
+    console.log("No jobId provided for progress update");
+    return;
+  }
+
+  try {
+    // Check if we're trying to update a job that is already completed
+    if (completedPrintJobs.has(jobId) && progress <= 90) {
+      console.log(`Skipping update for already completed job ${jobId} (progress: ${progress}%)`);
+      return;
+    }
+    
+    const updateData = {
+      progress: progress,
+      updatedAt: Date.now(),
+    };
+    
+    if (status) {
+      updateData.status = status;
+    }
+    
+    if (statusMessage) {
+      updateData.statusMessage = statusMessage;
+    }
+    
+    // If job is being marked as complete, track it to prevent restarting
+    if (progress >= 100 || status === "completed") {
+      completedPrintJobs.add(jobId);
+      recentPrintJobs.set(`completed-${jobId}`, Date.now());
+      console.log(`Marked job ${jobId} as completed and added to tracking`);
+    }
+    
+    await update(dbRef(db, `printJobs/${jobId}`), updateData);
+    console.log(`Updated job ${jobId} progress to ${progress}%${status ? `, status: ${status}` : ''}`);
+    
+    // Also send update to the API endpoint for potential future use
+    try {
+      await axios.post('http://localhost:5000/api/update-print-job', {
+        printJobId: jobId,
+        progress,
+        status,
+        statusMessage
+      });
+    } catch (apiError) {
+      // Silently fail on API error since we already updated Firebase directly
+      console.warn("Failed to update via API endpoint:", apiError.message);
+    }
+  } catch (error) {
+    console.error("Error updating print job progress:", error);
+  }
+};
+
+/**
  * Base handler for printing files
  */
 const basePrintFileHandler = async (req, res) => {
@@ -850,8 +996,8 @@ const basePrintFileHandler = async (req, res) => {
       printerName,
       fileUrl,
       isColor,
-      selectedPageOption,
-      customPageRange,
+      
+      
       orientation,
       selectedSize,
       customWidth,
@@ -873,7 +1019,7 @@ const basePrintFileHandler = async (req, res) => {
     // Update status in Firebase if printJobId is provided
     if (printJobId) {
       try {
-        await updatePrintProgress(printJobId, 5, 'Preparing to print...');
+        await updatePrintJobProgress(printJobId, 5, "processing", "Initializing print job");
       } catch (updateError) {
         console.warn(`Could not update print job status in Firebase: ${updateError.message}`);
       }
@@ -960,7 +1106,7 @@ const basePrintFileHandler = async (req, res) => {
             // If we have a print job ID, update status
             if (printJobId) {
               try {
-                await updatePrintProgress(printJobId, 5, 'Firebase token expired. Please try again.');
+                await updatePrintJobProgress(printJobId, 5, "error", "Firebase token expired. Please try again.");
                 await update(dbRef(db, `files/${printJobId}`), {
                   status: "Error",
                   printStatus: "URL token expired. Please refresh and try again."
@@ -1013,7 +1159,7 @@ const basePrintFileHandler = async (req, res) => {
       // If we have a print job ID, update status
       if (printJobId) {
         try {
-          await updatePrintProgress(printJobId, 5, `Download failed: ${downloadError.message}`);
+          await updatePrintJobProgress(printJobId, 5, "error", `Download failed: ${downloadError.message}`);
           await update(dbRef(db, `files/${printJobId}`), {
             status: "Error",
             printStatus: "Failed to download file. Please try again."
@@ -1031,7 +1177,7 @@ const basePrintFileHandler = async (req, res) => {
 
     // Process PDF if needed - only if the file is actually a PDF
     if (fileExtension === 'pdf' && (selectedPageOption || orientation || selectedSize)) {
-      console.log("Processing PDF with options:", { selectedPageOption, orientation, selectedSize });
+      console.log("Processing PDF with options:", {  orientation, selectedSize });
 
       try {
         const pdfOptions = {
@@ -1080,7 +1226,7 @@ const basePrintFileHandler = async (req, res) => {
       // Update status in Firebase if printJobId is provided
       if (printJobId) {
         try {
-          await updatePrintProgress(printJobId, 30, 'Sending to printer...');
+          await updatePrintJobProgress(printJobId, 30, "processing", "Sending to printer");
         } catch (updateError) {
           console.warn(`Could not update print job status in Firebase: ${updateError.message}`);
         }
@@ -1178,7 +1324,7 @@ const basePrintFileHandler = async (req, res) => {
       // Update status in Firebase if printJobId is provided
       if (printJobId) {
         try {
-          await updatePrintProgress(printJobId, 100, 'Print job completed');
+          await updatePrintJobProgress(printJobId, 100, "completed", "Print job completed successfully");
         } catch (updateError) {
           console.warn(`Could not update final print job status in Firebase: ${updateError.message}`);
         }
@@ -1234,6 +1380,8 @@ const basePrintFileHandler = async (req, res) => {
  * Enhanced print file handler with Word document support
  */
 const enhancedPrintFileHandler = async (req, res) => {
+  console.log("=== USING ENHANCED PRINT FILE HANDLER FOR WORD DOCUMENTS ===");
+  
   let filePath = '';
   let processedFilePath = '';
   let wordPrintError = null;
@@ -1244,8 +1392,8 @@ const enhancedPrintFileHandler = async (req, res) => {
       printerName,
       fileUrl,
       isColor,
-      selectedPageOption,
-      customPageRange,
+      
+      
       orientation,
       selectedSize,
       customWidth,
@@ -1321,7 +1469,7 @@ const enhancedPrintFileHandler = async (req, res) => {
 
     // Process PDF if needed - only if the file is actually a PDF
     if (fileExtension === 'pdf' && (selectedPageOption || orientation || selectedSize)) {
-      console.log("Processing PDF with options:", { selectedPageOption, orientation, selectedSize });
+      console.log("Processing PDF with options:", {  orientation, selectedSize });
 
       try {
         const pdfOptions = {
@@ -1460,8 +1608,12 @@ const enhancedPrintFileHandler = async (req, res) => {
         try { fs.unlinkSync(processedFilePath); } catch (e) { /* ignore */ }
       }
 
-      // Pass control to the base handler for non-Word documents
-      return basePrintFileHandler(req, res);
+      // DO NOT call basePrintFileHandler to avoid double printing
+      // Instead return an error message that this handler only supports Word documents
+      return res.status(400).json({
+        status: 'error',
+        error: 'This specialized handler only supports Word documents. Use the main print endpoint directly.'
+      });
     }
   } catch (error) {
     // Clean up any temporary files in case of error
@@ -1478,66 +1630,172 @@ const enhancedPrintFileHandler = async (req, res) => {
 
 // Export the enhanced version as the main printFileHandler
 export const printFileHandler = async (req, res) => {
-  const { fileUrl, fileName, printerName, copies = 1, isColor = false, orientation = 'portrait', selectedSize = 'Short Bond', printJobId } = req.body;
+  // Get a print job ID for tracking progress - prioritize printJobId over jobId 
+  // for backward compatibility with different frontend components
+  const printJobId = req.body.printJobId || req.body.jobId || Date.now().toString();
+  
+  // Skip processing if this job has already been completed to prevent restarting
+  if (completedPrintJobs.has(printJobId)) {
+    console.log(`Job ${printJobId} has already completed, returning success without reprocessing`);
+    return res.json({
+      status: 'success',
+      message: 'Print job already completed',
+      details: {
+        isCompleted: true,
+        jobId: printJobId
+      }
+    });
+  }
+  
+  await updatePrintJobProgress(printJobId, 0, "pending", "Starting print job...");
 
   try {
-    // Update initial progress
-    await updatePrintProgress(printJobId, 5, "Downloading file...");
+    // Extract file name from request for duplicate prevention
+    const fileName = req.body.fileName || (req.file ? req.file.originalname : 'unknown');
+    
+    // Check if this is a duplicate print job
+    if (trackPrintJob(printJobId, fileName)) {
+      console.log(`Detected duplicate print job for "${fileName}" with ID ${printJobId}`);
+      
+      // Return success but don't actually print again
+      return res.json({
+        status: 'success',
+        message: 'Print job already in progress',
+        details: {
+          isDuplicate: true,
+          originalJobId: printJobId
+        }
+      });
+    }
+    
+    // First, determine if this is a Word document that should be handled by the enhanced handler
+    const { fileUrl, fileType } = req.body;
+    
+    // Determine file extension from fileName or fileType parameter
+    let fileExtension = 'pdf'; // Default extension
+    
+    if (fileType) {
+      fileExtension = fileType.toLowerCase();
+    } else if (fileName) {
+      const lastDotIndex = fileName.lastIndexOf('.');
+      if (lastDotIndex !== -1) {
+        fileExtension = fileName.substring(lastDotIndex + 1).toLowerCase();
+      }
+    } else if (fileUrl) {
+      // Try to get extension from URL if available
+      const urlFileName = fileUrl.split('/').pop()?.split('?')[0];
+      if (urlFileName && urlFileName.includes('.')) {
+        fileExtension = urlFileName.split('.').pop().toLowerCase();
+      }
+    }
+    
+    console.log(`Print request for file type: ${fileExtension}`);
+    
+    // If it's a Word document and not a direct file upload, use the enhanced handler
+    if (['doc', 'docx'].includes(fileExtension) && !req.file) {
+      console.log("Routing to enhanced Word document handler");
+      return enhancedPrintFileHandler(req, res);
+    }
+    
+    // Otherwise proceed with standard printing flow
+    console.log("Processing with standard print handler");
 
-    // Download the file
-    const response = await axios({
-      method: 'get',
-      url: fileUrl,
-      responseType: 'stream'
-    });
+  // Local file path for temp file
+  let filePath;
+  let printResult;
 
-    await updatePrintProgress(printJobId, 15, "Processing document...");
+    // Extract request parameters
+    const { 
+      printerName, 
+      copies = 1, 
+      selectedSize = 'Short Bond',
+      orientation = 'portrait',
+      isColor = true, 
+      totalPages = 1
+    } = req.body;
 
-    // Create temp directory if it doesn't exist
-    const tempDir = path.join(__dirname, 'temp');
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir);
+    if (!fileUrl && !req.file) {
+      throw new Error('No file provided for printing');
     }
 
-    // Generate unique filename
-    const uniqueFilename = `${uuidv4()}_${fileName}`;
-    const filePath = path.join(tempDir, uniqueFilename);
+    if (!printerName) {
+      throw new Error('Printer name is required');
+    }
 
-    // Save file to disk
-    const writer = fs.createWriteStream(filePath);
-    response.data.pipe(writer);
+    const requestFileType = fileType ? fileType.toLowerCase() : '';
 
-    await new Promise((resolve, reject) => {
-      writer.on('finish', resolve);
-      writer.on('error', reject);
-    });
+    await updatePrintJobProgress(printJobId, 10, "processing", "Preparing document...");
 
-    await updatePrintProgress(printJobId, 30, "Configuring printer settings...");
+    // Check if we have a file upload or remote URL
+    if (req.file) {
+      // Direct file upload (multipart form)
+      filePath = req.file.path;
+      await updatePrintJobProgress(printJobId, 20, "processing", "Processing uploaded file...");
+    } else if (fileUrl) {
+      // Remote file URL
+      await updatePrintJobProgress(printJobId, 20, "processing", "Downloading file...");
+      
+      // Create the temp directory if it doesn't exist
+      const tempDir = path.join(__dirname, 'temp');
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+      
+      // Generate a unique filename for the temp file
+      const uniqueId = uuidv4();
+      filePath = path.join(tempDir, `${uniqueId}_${fileName || path.basename(fileUrl)}`);
+      
+      // Download the file from the provided URL
+      try {
+        await downloadFile(fileUrl, filePath);
+        await updatePrintJobProgress(printJobId, 40, "processing", "File downloaded successfully");
+      } catch (downloadError) {
+        console.error('Error downloading file:', downloadError);
+        throw new Error(`Failed to download file: ${downloadError.message}`);
+      }
+    } else {
+      throw new Error('Invalid file source');
+    }
 
-    // Determine file type and use appropriate print method
-    const fileExt = path.extname(fileName).toLowerCase();
-    let printResult;
+    // Get file extension and content type for determining file type
+    const fileExt = path.extname(filePath).toLowerCase();
+    const contentType = req.body.contentType || '';
 
-    await updatePrintProgress(printJobId, 45, "Preparing to print...");
+    // Print options based on form inputs
+    const printOptions = {
+      copies: parseInt(copies) || 1,
+      selectedSize,
+      orientation,
+      totalPages: parseInt(totalPages) || 1
+    };
 
-    if (fileExt === '.pdf') {
-      await updatePrintProgress(printJobId, 60, "Sending PDF to printer...");
-      printResult = await printFileWithSumatra(filePath, printerName, isColor);
-    } else if (['.doc', '.docx'].includes(fileExt)) {
-      await updatePrintProgress(printJobId, 60, "Processing Word document...");
+    // Process the file based on its type
+    await updatePrintJobProgress(printJobId, 50, "processing", "Processing file for printing...");
+
+    // Determine file type based on extension or explicitly provided fileType
+    if (fileExt === '.pdf' || requestFileType === 'pdf' || contentType === 'application/pdf') {
+      await updatePrintJobProgress(printJobId, 60, "processing", "Sending PDF to printer...");
+      // Use direct PDF printing for more reliable results
+      printResult = await printPdfDirect(filePath, printerName, isColor);
+    } else if (['.doc', '.docx'].includes(fileExt) || requestFileType === 'doc' || requestFileType === 'docx' || 
+               contentType.includes('word') || contentType.includes('officedocument')) {
+      await updatePrintJobProgress(printJobId, 60, "processing", "Processing Word document...");
       printResult = await printWordDocument(filePath, printerName, isColor, selectedSize, orientation);
-    } else if (['.jpg', '.jpeg', '.png'].includes(fileExt)) {
-      await updatePrintProgress(printJobId, 60, "Processing image...");
+    } else if (['.jpg', '.jpeg', '.png'].includes(fileExt) || 
+               requestFileType === 'jpg' || requestFileType === 'jpeg' || requestFileType === 'png' || 
+               contentType.includes('image/')) {
+      await updatePrintJobProgress(printJobId, 60, "processing", "Processing image...");
       printResult = await printImageFile(filePath, printerName, isColor, orientation);
     } else {
+      console.error(`Unsupported file type: fileExt=${fileExt}, requestFileType=${requestFileType}, contentType=${contentType}`);
       throw new Error('Unsupported file type');
     }
 
-    await updatePrintProgress(printJobId, 75, "Printing in progress...");
+    await updatePrintJobProgress(printJobId, 75, "printing", "Printing in progress...");
 
     // Simulate print completion after a delay (since we can't track actual printer progress)
     setTimeout(async () => {
-      await updatePrintProgress(printJobId, 90, "Finishing print job...");
+      await updatePrintJobProgress(printJobId, 90, "printing", "Finishing print job...");
 
       // Clean up temp file
       try {
@@ -1548,7 +1806,7 @@ export const printFileHandler = async (req, res) => {
 
       // Mark as complete
       setTimeout(async () => {
-        await updatePrintProgress(printJobId, 100, "Print job completed");
+        await updatePrintJobProgress(printJobId, 100, "completed", "Print job completed");
       }, 1000);
     }, 2000);
 
@@ -1562,11 +1820,7 @@ export const printFileHandler = async (req, res) => {
 
     // Update Firebase with error status
     if (printJobId) {
-      await update(dbRef(db, `files/${printJobId}`), {
-        status: "Error",
-        progress: 0,
-        printStatus: error.message || "Failed to print document"
-      });
+      await updatePrintJobProgress(printJobId, 0, "error", `Error: ${error.message || "Failed to print document"}`);
     }
 
     res.status(500).json({
@@ -1884,6 +2138,338 @@ export const testPrinterConnectivityHandler = async (req, res) => {
       status: 'error',
       error: error.message,
     });
+  }
+};
+
+// Track active PDF print jobs to prevent a job from being processed twice
+// activePdfPrintJobs is already declared at the top of the file as a Set
+
+// Function to clean up old PDF print script files
+const cleanupOldPrintScripts = () => {
+  try {
+    const tempDir = path.join(__dirname, 'temp');
+    if (!fs.existsSync(tempDir)) return;
+    
+    const files = fs.readdirSync(tempDir);
+    const now = Date.now();
+    const ONE_HOUR = 60 * 60 * 1000;
+    
+    // Find script files that are older than one hour
+    const oldFiles = files.filter(filename => {
+      // Match print script files
+      if (!filename.match(/print_script_\d+\.ps1/)) return false;
+      
+      try {
+        const filePath = path.join(tempDir, filename);
+        const stats = fs.statSync(filePath);
+        return now - stats.mtime.getTime() > ONE_HOUR;
+      } catch (err) {
+        return false;
+      }
+    });
+    
+    // Delete old files
+    if (oldFiles.length > 0) {
+      console.log(`Cleaning up ${oldFiles.length} old print script files`);
+      
+      oldFiles.forEach(filename => {
+        try {
+          fs.unlinkSync(path.join(tempDir, filename));
+        } catch (err) {
+          console.warn(`Could not delete old script file ${filename}: ${err.message}`);
+        }
+      });
+    }
+  } catch (err) {
+    console.error("Error cleaning up print script files:", err);
+  }
+};
+
+// Run cleanup periodically
+setInterval(cleanupOldPrintScripts, 15 * 60 * 1000); // Every 15 minutes
+
+export const printPdfDirect = async (filePath, printerName, isColor = true) => {
+  // Run cleanup before starting a new print job
+  cleanupOldPrintScripts();
+  
+  // Generate a unique job key
+  const jobKey = `${filePath}-${printerName}-${isColor ? 'color' : 'bw'}`;
+  
+  // Check if this job is already active
+  if (activePdfPrintJobs.has(jobKey)) {
+    console.log(`PDF print job already active for ${jobKey}, preventing duplicate printing`);
+    return "Print job already in progress";
+  }
+  
+  // Mark this job as active
+  activePdfPrintJobs.add(jobKey);
+  console.log(`Starting PDF print job: ${jobKey}`);
+  
+  const platform = os.platform();
+  
+  if (platform !== 'win32') {
+    activePdfPrintJobs.delete(jobKey); // Remove if error
+    throw new Error('Direct PDF printing is only available on Windows');
+  }
+
+  // Create a temporary script file for reliable execution
+  const uniqueId = Date.now();
+  const scriptPath = path.join(path.dirname(filePath), `print_script_${uniqueId}.ps1`);
+  
+  let printScript = `
+# Print PDF Directly
+$ErrorActionPreference = "Stop"
+
+Write-Host "===== DIRECT PDF PRINTING SCRIPT ====="
+Write-Host "Printer: ${printerName}"
+Write-Host "File: ${filePath}"
+Write-Host "Color: ${isColor ? 'Yes' : 'No'}"
+
+# Check if file exists
+if (!(Test-Path "${filePath}")) {
+    Write-Error "File does not exist: ${filePath}"
+    exit 1
+}
+
+# Check printer exists
+try {
+    $printerObj = Get-Printer -Name "${printerName}" -ErrorAction Stop
+    Write-Host "Found printer: $($printerObj.Name) [Status: $($printerObj.PrinterStatus)]"
+} catch {
+    Write-Error "Printer not found: ${printerName}"
+    exit 1
+}
+
+# Get file info
+$file = Get-Item "${filePath}"
+Write-Host "File size: $($file.Length) bytes"
+
+# Set a flag to track if we've successfully printed
+$printSuccess = $false
+
+# Method 1: Use AcroRd32.exe if available (most reliable for PDFs)
+if (-not $printSuccess) {
+    try {
+        $acrobatPath = "C:\\Program Files (x86)\\Adobe\\Acrobat Reader DC\\Reader\\AcroRd32.exe"
+        if (Test-Path $acrobatPath) {
+            Write-Host "Using Adobe Reader for printing..."
+            & $acrobatPath /t "${filePath}" "${printerName}"
+            Write-Host "Print job submitted via Adobe Reader"
+            Start-Sleep -Seconds 2
+            $printSuccess = $true
+        }
+    } catch {
+        Write-Host "Adobe Reader print failed: $_"
+    }
+}
+
+# Method 2: Use the system print dialog ONLY if Method 1 failed
+if (-not $printSuccess) {
+    try {
+        Write-Host "Setting default printer to ${printerName}..."
+        $wshNetwork = New-Object -ComObject WScript.Network
+        $wshNetwork.SetDefaultPrinter("${printerName}")
+        
+        Write-Host "Starting direct print using Windows API..."
+        Add-Type -AssemblyName System.Windows.Forms
+        
+        # Create PDF printing logic using native Windows API
+        Add-Type -TypeDefinition @"
+        using System;
+        using System.Drawing;
+        using System.Drawing.Printing;
+        using System.IO;
+        using System.Windows.Forms;
+        using System.Runtime.InteropServices;
+
+        public class PDFPrinter
+        {
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+            private class DOCINFOA
+            {
+                [MarshalAs(UnmanagedType.LPStr)]
+                public string pDocName;
+                [MarshalAs(UnmanagedType.LPStr)]
+                public string pOutputFile;
+                [MarshalAs(UnmanagedType.LPStr)]
+                public string pDataType;
+            }
+
+            [DllImport("winspool.Drv", EntryPoint = "OpenPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+            private static extern bool OpenPrinter([MarshalAs(UnmanagedType.LPStr)] string szPrinter, out IntPtr hPrinter, IntPtr pd);
+
+            [DllImport("winspool.Drv", EntryPoint = "ClosePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+            private static extern bool ClosePrinter(IntPtr hPrinter);
+
+            [DllImport("winspool.Drv", EntryPoint = "StartDocPrinterA", SetLastError = true, CharSet = CharSet.Ansi, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+            private static extern bool StartDocPrinter(IntPtr hPrinter, Int32 level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOA di);
+
+            [DllImport("winspool.Drv", EntryPoint = "EndDocPrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+            private static extern bool EndDocPrinter(IntPtr hPrinter);
+
+            [DllImport("winspool.Drv", EntryPoint = "StartPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+            private static extern bool StartPagePrinter(IntPtr hPrinter);
+
+            [DllImport("winspool.Drv", EntryPoint = "EndPagePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+            private static extern bool EndPagePrinter(IntPtr hPrinter);
+
+            [DllImport("winspool.Drv", EntryPoint = "WritePrinter", SetLastError = true, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+            private static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, Int32 dwCount, out Int32 dwWritten);
+
+            [DllImport("shell32.dll", CharSet = CharSet.Auto)]
+            private static extern bool ShellExecuteEx(ref SHELLEXECUTEINFO lpExecInfo);
+
+            [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+            private struct SHELLEXECUTEINFO
+            {
+                public int cbSize;
+                public uint fMask;
+                public IntPtr hwnd;
+                [MarshalAs(UnmanagedType.LPTStr)]
+                public string lpVerb;
+                [MarshalAs(UnmanagedType.LPTStr)]
+                public string lpFile;
+                [MarshalAs(UnmanagedType.LPTStr)]
+                public string lpParameters;
+                [MarshalAs(UnmanagedType.LPTStr)]
+                public string lpDirectory;
+                public int nShow;
+                public IntPtr hInstApp;
+                public IntPtr lpIDList;
+                [MarshalAs(UnmanagedType.LPTStr)]
+                public string lpClass;
+                public IntPtr hkeyClass;
+                public uint dwHotKey;
+                public IntPtr hIcon;
+                public IntPtr hProcess;
+            }
+
+            private const int SW_HIDE = 0;
+            private const uint SEE_MASK_NOCLOSEPROCESS = 0x00000040;
+            private const uint SEE_MASK_FLAG_NO_UI = 0x00000400;
+
+            public static bool PrintPDF(string filePath, string printerName)
+            {
+                try
+                {
+                    // First try ShellExecute with print verb (most reliable)
+                    SHELLEXECUTEINFO info = new SHELLEXECUTEINFO();
+                    info.cbSize = Marshal.SizeOf(info);
+                    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
+                    info.hwnd = IntPtr.Zero;
+                    info.lpVerb = "print";
+                    info.lpFile = filePath;
+                    info.lpParameters = "";
+                    info.lpDirectory = "";
+                    info.nShow = SW_HIDE;
+                    info.hInstApp = IntPtr.Zero;
+
+                    ShellExecuteEx(ref info);
+
+                    if (info.hProcess != IntPtr.Zero)
+                    {
+                        System.Threading.Thread.Sleep(5000);
+                        return true;
+                    }
+
+                    return false;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Error printing PDF: " + ex.Message);
+                    return false;
+                }
+            }
+        }
+"@
+
+        # Try to print using our custom class
+        $result = [PDFPrinter]::PrintPDF("${filePath}", "${printerName}")
+        if ($result) {
+            Write-Host "Print job submitted successfully using Windows API"
+            $printSuccess = $true
+        } else {
+            Write-Host "Direct Windows API printing did not return success"
+        }
+        
+        Start-Sleep -Seconds 3
+    } catch {
+        Write-Host "Method 2 failed: $_"
+    }
+}
+
+# Method 3: Fallback to basic printout ONLY if Methods 1 and 2 failed
+if (-not $printSuccess) {
+    try {
+        Write-Host "Attempting fallback print method..."
+        Start-Process -FilePath "${filePath}" -Verb Print -WindowStyle Hidden
+        Start-Sleep -Seconds 5
+        Write-Host "Fallback print method completed"
+        $printSuccess = $true
+    } catch {
+        Write-Host "All print methods failed: $_"
+        exit 1
+    }
+}
+
+# Check print queue one more time
+try {
+    $jobs = Get-PrintJob -PrinterName "${printerName}" -ErrorAction SilentlyContinue
+    # ... rest of existing script ...
+}
+
+# ... rest of existing code ...
+`;
+
+  fs.writeFileSync(scriptPath, printScript);
+  
+  try {
+    console.log(`Created print script: ${scriptPath}`);
+    console.log(`Executing direct PDF print for file: ${filePath}`);
+    
+    const { stdout, stderr } = await new Promise((resolve, reject) => {
+      exec(`powershell.exe -ExecutionPolicy Bypass -File "${scriptPath}"`, 
+        { timeout: 30000 }, // 30 second timeout
+        (error, stdout, stderr) => {
+          if (error && !stdout.includes("Print job submitted")) {
+            reject(new Error(`Print failed: ${error.message}`));
+            return;
+          }
+          resolve({ stdout, stderr });
+        });
+    });
+    
+    console.log("Print script output:", stdout);
+    if (stderr) {
+      console.warn("Print script errors:", stderr);
+    }
+    
+    return stdout;
+  } catch (error) {
+    console.error("Error executing PDF print script:", error);
+    throw error;
+  } finally {
+    // Clean up the script file
+    try {
+      if (fs.existsSync(scriptPath)) {
+        fs.unlinkSync(scriptPath);
+      }
+    } catch (e) {
+      console.error("Error cleaning up script file:", e);
+    }
+    
+    // Remove from active jobs when done
+    activePdfPrintJobs.delete(fileKey);
+    
+    // Automatically clean up any active jobs older than 5 minutes to prevent leaks
+    const now = Date.now();
+    const FIVE_MINUTES = 5 * 60 * 1000;
+    for (const [key, timestamp] of activePdfPrintJobs.entries()) {
+      if (now - timestamp > FIVE_MINUTES) {
+        activePdfPrintJobs.delete(key);
+        console.log(`Removed stale PDF print job: ${key}`);
+      }
+    }
   }
 };
 

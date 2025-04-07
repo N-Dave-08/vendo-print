@@ -4,7 +4,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 
-import { printFileWithSumatra } from './printer_controller.js';
+import { printPdfDirect } from './printer_controller.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -68,10 +68,10 @@ export const scanWithWIA = (outputPath) => {
 
     const escapedPath = outputPath.replace(/\\/g, '\\\\');
 
-    // Simplified script - focus on just making a successful scan
+    // Enhanced script with optimized settings for faster scanning
     const scanScript = `
       try {
-        Write-Output "Creating basic WIA scan..."
+        Write-Output "Creating optimized WIA scan..."
         $deviceManager = New-Object -ComObject WIA.DeviceManager
         $device = $null
         
@@ -87,8 +87,30 @@ export const scanWithWIA = (outputPath) => {
         $device = ($scanners | Select-Object -First 1).Connect()
         Write-Output "Connected to scanner: $($device.Properties('Name').Value)"
         
-        # Start the scan
+        # Configure scan properties for balance of quality and size
+        # Lower resolution and bit depth for faster scanning and smaller file size
         $item = $device.Items(1)
+        
+        # Common properties:
+        # 6146 = Horizontal Resolution (DPI)
+        # 6147 = Vertical Resolution (DPI)
+        # 6148 = Horizontal Start Position
+        # 6149 = Vertical Start Position
+        # 6150 = Horizontal Extent (width)
+        # 6151 = Vertical Extent (height)
+        # 4104 = Brightness
+        # 4105 = Contrast
+        # 4106 = Color Mode (1=B&W, 2=Grayscale, 4=Color)
+        
+        # Set resolution to 150 DPI (faster)
+        try { $item.Properties("6146") = 150 } catch { Write-Output "Could not set horizontal resolution" }
+        try { $item.Properties("6147") = 150 } catch { Write-Output "Could not set vertical resolution" }
+        
+        # Set color mode to color but with compression
+        try { $item.Properties("4106") = 4 } catch { Write-Output "Could not set color mode" }
+        
+        # Start the scan
+        Write-Output "Starting scan with optimized settings..."
         $image = $item.Transfer()
         
         # Save the file directly
@@ -121,7 +143,8 @@ export const scanWithWIA = (outputPath) => {
     const command = `powershell.exe -ExecutionPolicy Bypass -File "${scriptPath}"`;
     console.log('Command:', command);
 
-    const process = exec(command, { timeout: 60000 }, (error, stdout, stderr) => {
+    // Increase timeout to 2 minutes (120000ms) for larger scans
+    const process = exec(command, { timeout: 120000 }, (error, stdout, stderr) => {
       // Clean up the script file
       try {
         if (fs.existsSync(scriptPath)) {
@@ -138,7 +161,7 @@ export const scanWithWIA = (outputPath) => {
         return;
       }
 
-      // Wait 2 seconds to ensure file has been saved
+      // Wait 3 seconds to ensure file has been saved (increased from 2 seconds)
       setTimeout(() => {
         if (fs.existsSync(outputPath)) {
           const stats = fs.statSync(outputPath);
@@ -154,7 +177,7 @@ export const scanWithWIA = (outputPath) => {
           console.error('File does not exist after scan');
           reject(new Error('Scan completed but file was not saved'));
         }
-      }, 2000);
+      }, 3000);
     });
 
     process.stdout.on('data', (data) => {
@@ -205,7 +228,7 @@ export const copyHandler = async (req, res) => {
     }
 
     console.log('Starting print...');
-    await printFileWithSumatra(outputPath, printerName);
+    await printPdfDirect(outputPath, printerName, true);
     console.log('Print completed');
 
     // Clean up
