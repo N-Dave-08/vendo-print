@@ -1035,7 +1035,11 @@ const basePrintFileHandler = async (req, res) => {
     // Update status in Firebase if printJobId is provided
     if (printJobId) {
       try {
-        await updatePrintJobProgress(printJobId, 5, "processing", "Initializing print job");
+        await updatePrintJobProgress(printJobId, 10, "processing", "Preparing print job...");
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await updatePrintJobProgress(printJobId, 20, "processing", "Initializing printer...");
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await updatePrintJobProgress(printJobId, 30, "processing", "Sending to printer...");
       } catch (updateError) {
         console.warn(`Could not update print job status in Firebase: ${updateError.message}`);
       }
@@ -1253,6 +1257,11 @@ const basePrintFileHandler = async (req, res) => {
       for (let i = 0; i < numCopies; i++) {
         console.log(`Printing copy ${i + 1} of ${numCopies} `);
 
+        // Update progress for each copy
+        if (printJobId) {
+          await updatePrintJobProgress(printJobId, 40 + (i * 15), "printing", `Printing copy ${i + 1} of ${numCopies}...`);
+        }
+
         // Log color information for debugging
         if (hasColorContent) {
           console.log(`Document contains color content (${colorPageCount || 'unknown'} colored pages detected)`);
@@ -1272,6 +1281,11 @@ const basePrintFileHandler = async (req, res) => {
 
       await Promise.all(printPromises);
       console.log(`Successfully printed ${numCopies} copies`);
+
+      // Update status to indicate completion
+      if (printJobId) {
+        await updatePrintJobProgress(printJobId, 90, "printing", "Finishing print job...");
+      }
 
       // Collect diagnostic info after printing completes 
       let diagnosticInfo = {};
@@ -1817,14 +1831,16 @@ export const printFileHandler = async (req, res) => {
       try {
         // Wait for print job to likely be sent to printer
         await new Promise(resolve => setTimeout(resolve, 2000));
-      await updatePrintJobProgress(printJobId, 90, "printing", "Finishing print job...");
-
-      // Clean up temp file
-      try {
-        fs.unlinkSync(filePath);
-      } catch (cleanupError) {
-        console.error('Error cleaning up temp file:', cleanupError);
-      }
+        
+        // Update to 95% before final completion
+        await updatePrintJobProgress(printJobId, 95, "printing", "Finishing print job...");
+        
+        // Clean up temp file
+        try {
+          fs.unlinkSync(filePath);
+        } catch (cleanupError) {
+          console.error('Error cleaning up temp file:', cleanupError);
+        }
 
         // Check for completion for up to 15 seconds with more reliable approach
         console.log(`Waiting for print job ${printJobId} to complete...`);
@@ -1840,7 +1856,7 @@ export const printFileHandler = async (req, res) => {
             await update(dbRef(db, `printJobs/${printJobId}`), {
               progress: 100,
               status: "completed",
-              statusMessage: "Print job sent to printer",
+              statusMessage: "Print job completed successfully",
               updatedAt: Date.now()
             });
             
@@ -1864,7 +1880,7 @@ export const printFileHandler = async (req, res) => {
         // One final attempt with the regular function in case the direct approach failed
         if (retryCount >= maxRetries) {
           console.log(`Maximum retries reached for job ${printJobId}, making final attempt...`);
-        await updatePrintJobProgress(printJobId, 100, "completed", "Print job completed");
+          await updatePrintJobProgress(printJobId, 100, "completed", "Print job completed successfully");
         }
       } catch (progressError) {
         console.error('Error updating final print status:', progressError);

@@ -1,59 +1,45 @@
 import { exec } from 'child_process';
+import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { fileURLToPath } from 'url';
+import { promisify } from 'util';
+import mammoth from 'mammoth';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { rgb } from 'pdf-lib';
 
+const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Function to kill any hanging LibreOffice processes
+async function killLibreOfficeProcesses() {
+    try {
+        await execAsync('powershell -Command "Stop-Process -Name \\"soffice\\" -Force -ErrorAction SilentlyContinue"');
+        console.log('Killed existing LibreOffice processes');
+    } catch (error) {
+        console.log('No LibreOffice processes to kill');
+    }
+}
+
 // Function to check if LibreOffice is installed
-export const checkLibreOffice = () => {
-    return new Promise((resolve, reject) => {
-        // Direct path to LibreOffice (hardcoded based on user confirmation)
-        const directPath = "C:\\Program Files\\LibreOffice\\program\\soffice.exe";
-
-        // Check if the direct path exists first
-        if (fs.existsSync(directPath)) {
-            console.log(`Found LibreOffice at hardcoded path: ${directPath}`);
-            return resolve(directPath);
-        }
-
-        // If direct path doesn't work, try standard command lookup
-        const checkCmd = process.platform === 'win32'
-            ? 'where soffice'
-            : 'which soffice';
-
-        exec(checkCmd, (error, stdout, stderr) => {
-            if (error) {
-                console.error('LibreOffice not found using PATH:', error);
-
-                // On Windows, try to check common installation directories
-                if (process.platform === 'win32') {
-                    console.log('Checking common LibreOffice installation directories...');
-                    // Common LibreOffice installation paths on Windows
-                    const commonPaths = [
+export async function checkLibreOffice() {
+    const possiblePaths = [
                         'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
                         'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
-                        'C:\\LibreOffice\\program\\soffice.exe'
+        'C:\\Program Files (x86)\\LibreOffice 7\\program\\soffice.exe',
+        'C:\\Program Files\\LibreOffice 7\\program\\soffice.exe'
                     ];
 
-                    // Check if any of these paths exist
-                    for (const path of commonPaths) {
+    for (const path of possiblePaths) {
                         if (fs.existsSync(path)) {
-                            console.log(`Found LibreOffice at: ${path}`);
-                            return resolve(path);
-                        }
+            return path;
                     }
                 }
 
-                reject(new Error('LibreOffice is not found on your system. Please install LibreOffice from https://www.libreoffice.org/download/download/ and make sure it\'s in your PATH.'));
-            } else {
-                resolve(stdout.trim());
+    throw new Error('LibreOffice not found. Please install LibreOffice first.');
             }
-        });
-    });
-};
 
 // Fallback text-based conversion when LibreOffice is not available
 export const fallbackTextBasedConversion = async (inputFilePath) => {
@@ -151,89 +137,183 @@ startxref
     }
 };
 
-// Main conversion function - tries LibreOffice first, then falls back to text-based conversion
-export const convertDocxToPdf = async (inputFilePath) => {
-    // Get temp directory for output
+// Add file validation function
+export const validateFile = async (filePath) => {
+    try {
+        // Check if file exists
+        if (!fs.existsSync(filePath)) {
+            throw new Error('File does not exist');
+        }
+
+        // Check file size (max 100MB)
+        const stats = fs.statSync(filePath);
+        if (stats.size > 100 * 1024 * 1024) {
+            throw new Error('File is too large (max 100MB)');
+        }
+
+        // Check if file is readable
+        await fs.promises.access(filePath, fs.constants.R_OK);
+
+        return true;
+    } catch (error) {
+        console.error('File validation error:', error);
+        throw error;
+    }
+};
+
+// Add function to copy file to temp directory
+export const copyToTemp = async (filePath) => {
+    try {
+        // Create temp directory if it doesn't exist
     const tempDir = path.join(path.dirname(path.dirname(__dirname)), 'temp');
     if (!fs.existsSync(tempDir)) {
         fs.mkdirSync(tempDir, { recursive: true });
     }
 
-    // Try LibreOffice conversion first
-    try {
-        // Verify LibreOffice is installed
-        let libreofficePath;
-        try {
-            libreofficePath = await checkLibreOffice();
-            console.log(`Using LibreOffice at: ${libreofficePath}`);
+        // Generate unique filename
+        const uniqueId = `${Date.now()}-${uuidv4()}`;
+        const ext = path.extname(filePath);
+        const tempFilePath = path.join(tempDir, `${uniqueId}${ext}`);
 
-            // Continue with LibreOffice conversion
-            return await new Promise((resolve, reject) => {
-                // For Windows command with spaces in paths, use PowerShell
-                const psCmd = `powershell.exe -Command "& '${libreofficePath}' --headless --convert-to pdf --outdir '${tempDir}' '${inputFilePath}'"`;
+        // Copy file
+        await fs.promises.copyFile(filePath, tempFilePath);
 
-                console.log(`Executing PowerShell command: ${psCmd}`);
-
-                exec(psCmd, (error, stdout, stderr) => {
-                    if (error) {
-                        console.error('PowerShell conversion error:', error);
-                        console.error('PowerShell stderr:', stderr);
-
-                        // If LibreOffice command fails, try fallback method
-                        console.log('LibreOffice command failed, trying fallback conversion...');
-                        fallbackTextBasedConversion(inputFilePath)
-                            .then(result => resolve(result))
-                            .catch(fbErr => reject(fbErr));
-                        return;
-                    }
-
-                    // LibreOffice outputs to the original filename but with .pdf extension
-                    const originalName = path.basename(inputFilePath);
-                    const expectedOutputName = originalName.replace(/\.(docx|doc)$/i, '.pdf');
-                    const actualOutputPath = path.join(tempDir, expectedOutputName);
-
-                    if (!fs.existsSync(actualOutputPath)) {
-                        console.error('Output file not found, trying fallback conversion...');
-                        fallbackTextBasedConversion(inputFilePath)
-                            .then(result => resolve(result))
-                            .catch(fbErr => reject(fbErr));
-                        return;
-                    }
-
-                    // Generate unique output filename
-                    const outputFileName = `${uuidv4()}.pdf`;
-                    const outputFilePath = path.join(tempDir, outputFileName);
-
-                    // Rename to our UUID filename for better tracking
-                    try {
-                        fs.renameSync(actualOutputPath, outputFilePath);
-                    } catch (renameError) {
-                        console.error('Error renaming file:', renameError);
-                        return reject(new Error(`Error renaming output file: ${renameError.message}`));
-                    }
-
-                    console.log(`Conversion successful: ${stdout}`);
-                    resolve({
-                        filePath: outputFilePath,
-                        fileName: outputFileName
-                    });
-                });
-            });
-
-        } catch (libreOfficeError) {
-            // LibreOffice not found, log error and continue to fallback
-            console.error('LibreOffice check failed:', libreOfficeError.message);
-            console.log('Falling back to text-based conversion...');
+        // Verify copy was successful
+        const sourceStats = fs.statSync(filePath);
+        const destStats = fs.statSync(tempFilePath);
+        if (sourceStats.size !== destStats.size) {
+            throw new Error('File copy verification failed');
         }
 
-        // If we get here, LibreOffice was not available, use fallback
-        return await fallbackTextBasedConversion(inputFilePath);
+        return tempFilePath;
+    } catch (error) {
+        console.error('Error copying file to temp directory:', error);
+        throw error;
+    }
+};
+
+// Main conversion function
+export async function convertDocxToPdf(inputFilePath, progressCallback = () => {}) {
+    let tempInputFile = null;
+    try {
+        // Kill any hanging LibreOffice processes
+        await killLibreOfficeProcesses();
+        progressCallback(10);
+
+        // Get absolute paths and normalize them
+        const absoluteInputPath = path.resolve(inputFilePath);
+        const tempDir = path.resolve(path.join(__dirname, '../printer/temp'));
+        const scriptPath = path.resolve(path.join(__dirname, '../scripts/convert.ps1'));
+
+        console.log('Input file path:', absoluteInputPath);
+        console.log('Temp directory:', tempDir);
+        console.log('Script path:', scriptPath);
+
+        // Validate input file exists and is accessible
+        try {
+            await fs.promises.access(absoluteInputPath, fs.constants.R_OK);
+        } catch (error) {
+            throw new Error(`Cannot access input file at: ${absoluteInputPath}. Error: ${error.message}`);
+        }
+
+        // Ensure temp directory exists
+        if (!fs.existsSync(tempDir)) {
+            throw new Error(`Temp directory not found at: ${tempDir}`);
+        }
+
+        // Clean old files from temp directory
+        const files = fs.readdirSync(tempDir);
+        for (const file of files) {
+            if (file.endsWith('.pdf') || file.endsWith('.docx')) {
+                try {
+                    fs.unlinkSync(path.join(tempDir, file));
+                } catch (error) {
+                    console.error('Error cleaning up old file:', error);
+                }
+            }
+        }
+
+        // Copy input file to temp directory with a simple name
+        const tempFileName = `${Date.now()}.docx`;
+        tempInputFile = path.join(tempDir, tempFileName);
+        await fs.promises.copyFile(absoluteInputPath, tempInputFile);
+        console.log('Copied input file to:', tempInputFile);
+
+        // Verify the file was copied successfully
+        try {
+            await fs.promises.access(tempInputFile, fs.constants.R_OK);
+            const stats = fs.statSync(tempInputFile);
+            console.log('Temp file size:', stats.size);
+            if (stats.size === 0) {
+                throw new Error('Copied file is empty');
+            }
+        } catch (error) {
+            throw new Error(`Failed to verify copied file: ${error.message}`);
+        }
+
+        // Get LibreOffice path
+        const libreOfficePath = await checkLibreOffice();
+        console.log('Using LibreOffice at:', libreOfficePath);
+
+        // Create PowerShell command to run the script
+        const psCommand = `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${scriptPath}" -inputFile "${tempInputFile}" -outputDir "${tempDir}" -libreOfficePath "${libreOfficePath}"`;
+
+        console.log('Executing command:', psCommand);
+
+        // Execute PowerShell command with increased buffer and shell option
+        const { stdout, stderr } = await execAsync(psCommand, {
+            windowsHide: true,
+            maxBuffer: 1024 * 1024 * 10, // 10MB buffer
+            shell: true,
+            timeout: 120000 // 2 minutes timeout
+        });
+
+        console.log('PowerShell stdout:', stdout);
+        if (stderr) {
+            console.error('PowerShell stderr:', stderr);
+            throw new Error(`PowerShell error: ${stderr}`);
+        }
+
+        progressCallback(80);
+
+        // The output file will have the same name as the temp input but with .pdf extension
+        const expectedOutputFile = path.join(tempDir, `${tempFileName.replace('.docx', '.pdf')}`);
+
+        console.log('Expected output file:', expectedOutputFile);
+
+        // Wait a bit for the file system to sync
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Check if the file exists
+        if (!fs.existsSync(expectedOutputFile)) {
+            throw new Error(`PDF conversion failed - output file not found at ${expectedOutputFile}`);
+        }
+
+        // Check if the file has content
+        const stats = fs.statSync(expectedOutputFile);
+        if (stats.size === 0) {
+            throw new Error('PDF conversion failed - output file is empty');
+        }
+
+        progressCallback(100);
+        return expectedOutputFile;
 
     } catch (error) {
         console.error('Error in conversion process:', error);
         throw error;
+    } finally {
+        // Clean up temporary input file
+        if (tempInputFile && fs.existsSync(tempInputFile)) {
+            try {
+                fs.unlinkSync(tempInputFile);
+            } catch (error) {
+                console.error('Error cleaning up temp input file:', error);
+            }
+        }
+        // Kill any remaining LibreOffice processes
+        await killLibreOfficeProcesses();
     }
-};
+}
 
 // Clean up temporary files
 export const cleanupTempFiles = (filePaths) => {

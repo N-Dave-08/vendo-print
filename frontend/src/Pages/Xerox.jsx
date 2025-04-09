@@ -281,22 +281,21 @@ const Xerox = () => {
       // Create a unique ID for the print job
       const printJobId = Date.now().toString();
 
-      // Record the print job in Firebase first
-      const printJobsRef = dbRef(realtimeDb, `files/${printJobId}`);
+      // Initialize the print job in Firebase first
+      const printJobsRef = dbRef(realtimeDb, `printJobs/${printJobId}`);
       await set(printJobsRef, {
         fileName: "Scanned Document",
-        fileUrl: filePreviewUrl, // Using the Firebase Storage URL instead of blob URL
+        fileUrl: filePreviewUrl,
         printerName: selectedPrinter,
         copies: copies,
-        selectedSize,
-        isColor,
-        totalPages,
+        isColor: isColor,
+        totalPages: totalPages,
+        status: "pending",
+        progress: 0,
+        statusMessage: "Initializing print job...",
+        createdAt: Date.now(),
         price: calculatedPrice,
-        progress: 5, // Start with 5% right away
-        printStatus: "Preparing print job...",
-        status: "Processing",
-        fileType: "image/jpeg",
-        timestamp: new Date().toISOString()
+        fileType: "image/jpeg"
       });
 
       // Update coins immediately
@@ -306,79 +305,39 @@ const Xerox = () => {
       });
       setAvailableCoins(updatedCoins);
 
+      // Prepare the print request data
+      const printData = {
+        fileUrl: filePreviewUrl,
+        fileName: "Scanned Document",
+        printerName: selectedPrinter,
+        copies: copies,
+        isColor: isColor,
+        orientation: orientation,
+        selectedSize: "Short Bond",
+        printJobId: printJobId,
+        totalPages: totalPages,
+        price: calculatedPrice,
+        fileType: "jpeg",
+        contentType: "image/jpeg",
+        printMethod: "direct"
+      };
+
       // Immediately redirect to printer page
       navigate('/printer');
 
-      // Progress simulation steps for background updates
-      const progressSteps = [
-        { progress: 15, status: "Processing document...", delay: 800 },
-        { progress: 30, status: "Configuring printer settings...", delay: 1500 },
-        { progress: 45, status: "Converting document format...", delay: 2200 },
-        { progress: 60, status: "Connecting to printer...", delay: 3000 },
-        { progress: 75, status: "Sending to printer...", delay: 3800 },
-        { progress: 85, status: "Printing in progress...", delay: 4500 },
-        { progress: 95, status: "Finishing print job...", delay: 5200 },
-      ];
-
-      // Start updating progress in the background
-      for (const step of progressSteps) {
-        setTimeout(() => {
-          update(printJobsRef, {
-            progress: step.progress,
-            printStatus: step.status
-          });
-        }, step.delay);
-      }
-
-      // Continue with API call in the background
-      const printJob = {
-        jobId: printJobId,
-        printJobId: printJobId,
-        fileName: "Scanned Document",
-        fileUrl: filePreviewUrl, // Using the Firebase Storage URL
-        printerName: selectedPrinter,
-        copies: copies,
-        selectedSize,
-        isColor,
-        totalPages,
-        fileType: "jpeg", // Change from 'jpg' to 'jpeg' to match standard MIME type
-        contentType: "image/jpeg",  // Add MIME type information
-        printMethod: "direct" // Request direct printing method
-      };
-
-      // Make API call in the background
-      fetch('http://localhost:5000/api/print', {
+      // Send print request to backend
+      const response = await fetch('http://localhost:5000/api/print', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(printJob),
-        // Add timeout to avoid hanging requests
+        body: JSON.stringify(printData),
         signal: AbortSignal.timeout(30000)
-      })
-        .then(response => {
-          if (!response.ok) {
-            throw new Error(`Print failed. Server returned ${response.status}`);
-          }
-          return response.json();
-        })
-        .then(data => {
-          // Update the print job with success status
-          update(printJobsRef, {
-            progress: 100,
-            printStatus: "Print job completed",
-            status: "Done"
-          });
-        })
-        .catch(error => {
-          console.error("Error in background print job:", error);
-          // Update the print job with error status
-          update(printJobsRef, {
-            progress: 0,
-            printStatus: `Error: ${error.message}`,
-            status: "Error"
-          });
-        });
+      });
+
+      if (!response.ok) {
+        throw new Error(`Print failed. Server returned ${response.status}`);
+      }
 
     } catch (err) {
       console.error("Print job error:", err);

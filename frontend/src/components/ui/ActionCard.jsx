@@ -24,28 +24,28 @@ const ActionCard = ({
 }) => {
     const cardContent = (
         <div className={`group hover:scale-105 transition-transform duration-300 ${className}`}>
-            <div className="card bg-base-100 border-primary border-4 shadow-xl hover:shadow-2xl">
-                <div className="card-body justify-center items-center py-12">
-                    <figure className="mb-2">
+            <div className="card bg-base-100 hover:bg-base-200 border-2 border-primary shadow-lg hover:shadow-xl transition-all">
+                <div className="card-body items-center justify-center py-8">
+                    <figure className="mb-4">
                         {typeof icon === 'string' ? (
                             // For traditional image source
                             <img 
                               src={icon} 
                               alt={alt || label} 
-                              className="w-28 h-28 transition-transform group-hover:scale-110" 
+                              className="w-24 h-24 transition-transform group-hover:scale-110" 
                             />
                         ) : (
                             // For Lucide icon components
                             React.createElement(icon, {
-                                className: `w-28 h-28 ${iconColor} transition-transform group-hover:scale-110`,
+                                className: `w-24 h-24 ${iconColor} transition-transform group-hover:scale-110`,
                                 strokeWidth: 1.5,
                                 "aria-hidden": "true"
                             })
                         )}
                     </figure>
-                    <div className="card-title mt-2 justify-center text-primary">
+                    <h3 className="card-title text-primary text-xl">
                         {label}
-                    </div>
+                    </h3>
                 </div>
             </div>
         </div>
@@ -65,21 +65,13 @@ const ActionCard = ({
     }
 
     return (
-        <div 
-            className="cursor-pointer" 
+        <button 
+            className="w-full" 
             onClick={onClick}
-            role="button"
-            tabIndex={0}
             aria-label={label}
-            onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    onClick && onClick(e);
-                }
-            }}
         >
             {cardContent}
-        </div>
+        </button>
     );
 };
 

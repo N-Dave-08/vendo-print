@@ -713,7 +713,153 @@ const Usb = () => {
       setPrintProgress(10);
       setPrintStatus("Reading file from USB drive...");
 
-      // Create a File object from the path
+      // Check if the file is a DOCX file
+      const isDocx = file.name.toLowerCase().endsWith(".docx") ||
+        file.name.toLowerCase().endsWith(".doc");
+
+      if (isDocx) {
+        console.log("DOCX file detected, converting to PDF using LibreOffice...");
+        setPrintStatus("Converting DOCX to PDF...");
+
+        try {
+          // Send the file path to the backend for conversion
+          const response = await axios.post('http://localhost:5000/api/convert-docx', 
+            { filePath: file.path }, 
+            {
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              timeout: 120000 // 2 minutes timeout
+            }
+          );
+
+          if (!response.data || response.data.status === 'error') {
+            throw new Error(response.data?.message || 'Server error during conversion');
+          }
+
+          // Get the converted PDF from Firebase Storage URL
+          const pdfUrl = response.data.pdfUrl;
+          if (!pdfUrl) {
+            throw new Error('No PDF URL received from server');
+          }
+
+          console.log('Converted PDF URL:', pdfUrl);
+
+          // Download the PDF file
+          const pdfResponse = await axios.get(pdfUrl, {
+            responseType: 'blob'
+          });
+
+          // Create a new file from the response
+          const pdfFile = new File([pdfResponse.data], file.name.replace(/\.(docx|doc)$/i, '.pdf'), { type: 'application/pdf' });
+          
+          // Get PDF page count
+          const pdfData = await pdfResponse.data.arrayBuffer();
+          const pdfDoc = await PDFDocument.load(pdfData);
+          const pageCount = pdfDoc.getPageCount();
+
+          // Set the file for preview
+          setFileToUpload(pdfFile);
+          setTotalPages(pageCount);
+
+          // Create a unique filename for storage
+          const timestamp = new Date().getTime();
+          const uniqueFileName = `${timestamp}_${pdfFile.name}`;
+          const storageRef = ref(storage, `uploads/${uniqueFileName}`);
+
+          // Upload the converted PDF to Firebase Storage
+          setPrintStatus("Uploading converted PDF...");
+          setPrintProgress(70);
+
+          const uploadTask = uploadBytesResumable(storageRef, pdfFile, {
+            contentType: 'application/pdf',
+            customMetadata: {
+              originalName: file.name,
+              convertedFrom: 'docx'
+            }
+          });
+
+          // Listen for upload task completion
+          uploadTask.on(
+            "state_changed",
+            (snapshot) => {
+              const progress = Math.round(
+                (snapshot.bytesTransferred / snapshot.totalBytes) * 100
+              );
+              setPrintProgress(70 + (progress * 0.3)); // Scale from 70-100%
+              setPrintStatus(`Uploading: ${progress}%`);
+            },
+            (error) => {
+              console.error("Upload error:", error);
+              setIsLoading(false);
+              setPrintStatus("Error uploading file. Please try again.");
+              setPrintProgress(0);
+            },
+            async () => {
+              try {
+                const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+                console.log("File uploaded, URL:", downloadURL);
+                setFilePreviewUrl(downloadURL);
+
+                // Create an iframe for color analysis
+                const iframe = document.createElement('iframe');
+                iframe.style.display = 'none';
+                iframe.src = '/proxy-pdf.html';
+                document.body.appendChild(iframe);
+
+                // Wait for iframe to load
+                await new Promise((resolve) => {
+                  iframe.onload = resolve;
+                });
+
+                // Send message to iframe with PDF URL
+                iframe.contentWindow.postMessage({
+                  type: 'analyzePDF',
+                  pdfUrl: downloadURL,
+                  filename: pdfFile.name
+                }, '*');
+
+                // Listen for color analysis results
+                const colorAnalysisResult = await new Promise((resolve) => {
+                  window.addEventListener('message', function onMessage(event) {
+                    if (event.data.type === 'colorAnalysisComplete') {
+                      window.removeEventListener('message', onMessage);
+                      document.body.removeChild(iframe);
+                      resolve(event.data);
+                    }
+                  });
+                });
+
+                console.log('Color analysis results:', colorAnalysisResult);
+
+                // Set the color analysis results
+                setColorAnalysis(colorAnalysisResult.results);
+
+                // If there are colored pages, automatically set isColor to true
+                if (colorAnalysisResult.results.hasColoredPages) {
+                  setIsColor(true);
+                }
+
+                setIsLoading(false);
+                setPrintStatus("Ready to print");
+                setPrintProgress(100);
+              } catch (error) {
+                console.error("Error getting download URL or analyzing colors:", error);
+                setIsLoading(false);
+                setPrintStatus("Error preparing file. Please try again.");
+                setPrintProgress(0);
+              }
+            }
+          );
+        } catch (error) {
+          console.error("Error converting DOCX:", error);
+          setIsLoading(false);
+          setPrintStatus("Error converting file. Please try again.");
+          setPrintProgress(0);
+          alert(`Error converting file: ${error.message}`);
+        }
+      } else {
+        // For non-DOCX files, read directly
       const response = await fetch(`http://localhost:5000/api/read-file?path=${encodeURIComponent(file.path)}`);
       
       if (!response.ok) {
@@ -724,14 +870,11 @@ const Usb = () => {
       setPrintStatus("Processing file...");
       
       const fileBlob = await response.blob();
-      const fileName = file.name;
-      const fileObj = new File([fileBlob], fileName, { type: fileBlob.type });
+        const fileObj = new File([fileBlob], file.name, { type: fileBlob.type });
       
-      setPrintProgress(50);
-      setPrintStatus("Preparing file for printing...");
-      
-      // Now process the file as if it was selected via input
+        // Process the file as if it was selected via input
       await processSelectedFile(fileObj);
+      }
       
     } catch (error) {
       console.error("Error handling USB file:", error);
@@ -752,53 +895,98 @@ const Usb = () => {
       setPrintProgress(10);
       setPrintStatus("Processing file...");
 
+      // For files from USB, we need to fetch the file content first
+      let fileToProcess = selectedFile;
+      if (selectedFile.path) {
+        setPrintStatus("Reading file from USB drive...");
+        try {
+          const response = await axios.get(`http://localhost:5000/api/read-file?path=${encodeURIComponent(selectedFile.path)}`, {
+            responseType: 'blob'
+          });
+          
+          // Create a new File object from the blob
+          fileToProcess = new File([response.data], selectedFile.name, {
+            type: response.data.type
+          });
+        } catch (error) {
+          console.error("Error reading file from USB:", error);
+          throw new Error("Failed to read file from USB drive");
+        }
+      }
+
       // Check if the file is a DOCX file
       const isDocx = selectedFile.name.toLowerCase().endsWith(".docx") ||
         selectedFile.name.toLowerCase().endsWith(".doc");
 
       // For DOCX files, convert to PDF using LibreOffice
-      let fileToUpload = selectedFile;
+      let fileToUpload = fileToProcess;
       let pageCount = 1;
 
       if (isDocx) {
-        console.log("DOCX file detected, converting to PDF using LibreOffice...");
+        console.log("DOCX file detected, converting to PDF...");
         setPrintStatus("Converting DOCX to PDF...");
 
         try {
-          const conversionResult = await convertDocxWithLibreOffice(selectedFile);
+          // For files from USB, we need to send the file content
+          const formData = new FormData();
+          formData.append('file', fileToProcess);
 
-          if (!conversionResult) {
-            console.error("DOCX conversion failed");
-            setIsLoading(false);
-            setPrintStatus("Conversion failed. Please try again.");
-            return;
+          const response = await axios.post('http://localhost:5000/api/convert-docx-content', 
+            formData,
+            {
+              headers: {
+                'Content-Type': 'multipart/form-data'
+              },
+              timeout: 120000 // 2 minutes timeout
+            }
+          );
+
+          if (!response.data || response.data.status === 'error') {
+            throw new Error(response.data?.message || 'Server error during conversion');
           }
 
-          fileToUpload = conversionResult.convertedFile;
-          pageCount = conversionResult.pageCount;
+          // Get the converted PDF from Firebase Storage URL
+          const pdfUrl = response.data.pdfUrl;
+          if (!pdfUrl) {
+            throw new Error('No PDF URL received from server');
+          }
 
-          console.log("Conversion complete, uploading converted PDF", fileToUpload);
+          console.log('Converted PDF URL:', pdfUrl);
+
+          // Download the PDF file
+          const pdfResponse = await axios.get(pdfUrl, {
+            responseType: 'blob'
+          });
+
+          // Create a new file from the response
+          fileToUpload = new File([pdfResponse.data], selectedFile.name.replace(/\.(docx|doc)$/i, '.pdf'), { type: 'application/pdf' });
+          
+          // Get PDF page count
+          const pdfData = await pdfResponse.data.arrayBuffer();
+          const pdfDoc = await PDFDocument.load(pdfData);
+          pageCount = pdfDoc.getPageCount();
+
+          console.log("Conversion complete, proceeding with converted PDF", fileToUpload);
           setPrintStatus("Analyzing document colors...");
           setPrintProgress(50);
         } catch (error) {
           console.error("Error converting with LibreOffice:", error);
-          alert("Server-side conversion failed. Please check if LibreOffice is installed on the server.");
           setIsLoading(false);
-          setPrintStatus("");
+          setPrintStatus("Conversion failed: " + (error.response?.data?.message || error.message));
           setPrintProgress(0);
           return;
         }
-      } else if (selectedFile.type === "application/pdf") {
-        // For PDF files, get the page count and analyze colors
+      } else if (fileToProcess.type === 'application/pdf') {
+        // For PDF files, get the page count
         try {
-          const fileSizeInKB = selectedFile.size / 1024;
-          const pdfData = await selectedFile.arrayBuffer();
+          const pdfData = await fileToProcess.arrayBuffer();
           const pdfDoc = await PDFDocument.load(pdfData);
           pageCount = pdfDoc.getPageCount();
           console.log(`PDF has ${pageCount} pages`);
           setPrintStatus("Analyzing document colors...");
         } catch (error) {
           console.error("Error getting PDF page count:", error);
+          const fileSizeInKB = fileToProcess.size / 1024;
           pageCount = Math.max(1, Math.ceil(fileSizeInKB / 100)); // rough estimate
         }
       }
@@ -812,7 +1000,7 @@ const Usb = () => {
       const metadata = {
         contentType: fileToUpload.type,
         customMetadata: {
-          public: "true", // Make it publicly readable
+          public: "true",
           pageCount: pageCount.toString(),
           fileName: selectedFile.name,
           original: selectedFile.name,
@@ -824,37 +1012,28 @@ const Usb = () => {
       setPrintStatus("Uploading file to storage...");
       setPrintProgress(60);
 
-      // Create a new File object from the converted file if it's a Blob
-      const fileToUploadFinal = fileToUpload instanceof Blob ?
-        new File([fileToUpload], uniqueFileName, { type: fileToUpload.type }) :
-        fileToUpload;
-
-      // Set the file for preview
-      setFileToUpload(fileToUploadFinal);
-
-      const uploadTask = uploadBytesResumable(storageRef, fileToUploadFinal, metadata);
+      const uploadTask = uploadBytesResumable(storageRef, fileToUpload, metadata);
 
       // Listen for upload task completion
       uploadTask.on(
         "state_changed",
         (snapshot) => {
-          // Update progress
-          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-          setPrintProgress(Math.min(60 + Math.floor(progress / 5), 80)); // Scale to go from 60-80%
-          setPrintStatus(`Uploading file: ${Math.round(progress)}%`);
+          const progress = Math.round(
+            (snapshot.bytesTransferred / snapshot.totalBytes) * 100
+          );
+          setPrintProgress(60 + (progress * 0.4)); // Scale from 60-100%
+          setPrintStatus(`Uploading: ${progress}%`);
         },
         (error) => {
           console.error("Upload error:", error);
-          setPrintStatus("Error uploading file");
           setIsLoading(false);
+          setPrintStatus("Error uploading file. Please try again.");
+          setPrintProgress(0);
         },
         async () => {
           try {
-            // Get download URL
-            setPrintStatus("Processing uploaded file...");
             const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-
-            // Set the preview URL
+            console.log("File uploaded, URL:", downloadURL);
             setFilePreviewUrl(downloadURL);
 
             // Create an iframe for color analysis
@@ -863,115 +1042,88 @@ const Usb = () => {
             iframe.src = '/proxy-pdf.html';
             document.body.appendChild(iframe);
 
-            // Wait for iframe to load and be ready
+            // Wait for iframe to load
             await new Promise((resolve) => {
-              const handleMessage = (event) => {
-                if (event.data.type === 'proxyReady') {
-                  window.removeEventListener('message', handleMessage);
-                  resolve();
-                }
-              };
-              window.addEventListener('message', handleMessage);
-              iframe.onload = () => {
-                // Send a ping to check if the proxy is ready
-                iframe.contentWindow.postMessage({ type: 'ping' }, '*');
-              };
+              iframe.onload = resolve;
             });
-
-            setPrintStatus("Analyzing document colors...");
 
             // Send message to iframe with PDF URL
             iframe.contentWindow.postMessage({
               type: 'analyzePDF',
               pdfUrl: downloadURL,
-              filename: selectedFile.name
+              filename: fileToUpload.name
             }, '*');
 
-            // Listen for color analysis results with timeout
-            const colorAnalysisResult = await Promise.race([
-              new Promise((resolve) => {
-                const handleColorAnalysis = (event) => {
-                  if (event.data.type === 'colorAnalysisComplete') {
-                    window.removeEventListener('message', handleColorAnalysis);
-                    document.body.removeChild(iframe);
-                    resolve(event.data);
-                  }
-                };
-                window.addEventListener('message', handleColorAnalysis);
-              }),
-              new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Color analysis timeout')), 30000)
-              )
-            ]).catch(error => {
-              console.error('Color analysis error:', error);
-              document.body.removeChild(iframe);
-              return { results: { hasColoredPages: false, coloredPages: [] } };
+            // Listen for color analysis results
+            const colorAnalysisResult = await new Promise((resolve) => {
+              window.addEventListener('message', function onMessage(event) {
+                if (event.data.type === 'colorAnalysisComplete') {
+                  window.removeEventListener('message', onMessage);
+                  document.body.removeChild(iframe);
+                  resolve(event.data);
+                }
+              });
             });
 
             console.log('Color analysis results:', colorAnalysisResult);
-            
-            // Update color analysis state
-            setColorAnalysis(colorAnalysisResult.results);
 
-            // Get the storage path
-            const storagePath = uploadTask.snapshot.ref.fullPath;
-
-            // Generate unique ID for this file
-            const fileId = Date.now().toString();
-
-            // Create the database reference
-            const fileDbRef = dbRef(realtimeDb, `uploadedFiles/${fileId}`);
-
-            // Create file entry in database with color analysis results
-            await set(fileDbRef, {
-              id: fileId,
-              fileName: selectedFile.name,
+            // Create database entry with comprehensive file information
+            const newFileRef = push(dbRef(realtimeDb, "uploadedFiles"));
+            const fileData = {
+              fileName: fileToUpload.name,
               fileUrl: downloadURL,
-              storagePath: storagePath,
-              fileType: fileToUploadFinal.type,
-              isOriginalDocx: isDocx,
+              fileType: fileToUpload.type,
+              uploadedAt: new Date().toISOString(),
               totalPages: pageCount,
-              timestamp: new Date().toISOString(),
-              uploadedFrom: "usb",
+              uploadSource: "usb",
               status: "ready",
-              colorAnalysis: colorAnalysisResult.results
-            });
+              isConverted: isDocx
+            };
 
-            // Update status
-            setPrintStatus("File uploaded successfully!");
-            setPrintProgress(85);
-
-            // If color pages are detected, automatically set isColor to true
-            if (colorAnalysisResult.results.hasColoredPages) {
-              setIsColor(true);
+            // Add color analysis data if available
+            if (colorAnalysisResult.results && !colorAnalysisResult.results.error) {
+              fileData.colorAnalysis = {
+                hasColoredPages: colorAnalysisResult.results.hasColoredPages,
+                coloredPageCount: colorAnalysisResult.results.coloredPageCount,
+                blackAndWhitePageCount: pageCount - colorAnalysisResult.results.coloredPageCount,
+                pageDetails: colorAnalysisResult.results.pageAnalysis?.map(page => ({
+                  pageNumber: page.pageNumber,
+                  hasColor: page.hasColor,
+                  colorPercentage: parseFloat(page.colorPercentage)
+                }))
+              };
             }
 
-            // Now send for printing
-            await handlePrintFile(downloadURL, selectedFile.name, pageCount, fileId, storagePath);
+            // Save to Firebase Realtime Database
+            await set(newFileRef, fileData);
+
+            // Set color analysis state for UI
+            setColorAnalysis(colorAnalysisResult.results);
+            
+            // Update UI state
+            setIsLoading(false);
+            setPrintProgress(100);
+            setPrintStatus("File ready for printing");
 
           } catch (error) {
-            console.error("Error finalizing upload:", error);
-            setPrintStatus("Error finalizing upload");
-            // Reset progress on error
-            setPrintProgress(0);
+            console.error("Error getting download URL or analyzing colors:", error);
             setIsLoading(false);
+            setPrintStatus("Error preparing file. Please try again.");
+            setPrintProgress(0);
           }
         }
       );
     } catch (error) {
-      console.error("Error handling file:", error);
+      console.error("Error processing file:", error);
       setIsLoading(false);
       setPrintStatus("Error processing file. Please try again.");
       setPrintProgress(0);
+      alert(`Error: ${error.message}`);
     }
   };
 
-  // Update the handlePrint function to use our custom settings and send them to the backend
+  // Update the handlePrint function
   const handlePrint = async () => {
-
-    // Immediately redirect to printer page
-    navigate('/printer');
-
     if (!fileToUpload) {
       alert("Please select a file to print first.");
       return;
@@ -988,35 +1140,38 @@ const Usb = () => {
     }
 
     try {
-      // Get file extension
-      const fileName = fileToUpload.name;
-      const fileExtension = fileName.split('.').pop().toLowerCase();
-
       // Create a unique ID for the print job
       const printJobId = Date.now().toString();
 
-      // Record the print job in Firebase first
-      const printJobsRef = dbRef(realtimeDb, `files/${printJobId}`);
+      // Get actual page count from the file if it's a PDF
+      let actualPages = totalPages;
+      if (fileToUpload.type === "application/pdf") {
+        try {
+          const pdfData = await fileToUpload.arrayBuffer();
+          const pdfDoc = await PDFDocument.load(pdfData);
+          actualPages = pdfDoc.getPageCount();
+          console.log(`Actual PDF pages: ${actualPages}`);
+        } catch (error) {
+          console.error("Error getting PDF page count:", error);
+        }
+      }
+
+      // Initialize the print job in Firebase first
+      const printJobsRef = dbRef(realtimeDb, `printJobs/${printJobId}`);
       await set(printJobsRef, {
-        fileName: fileName,
+        fileName: fileToUpload.name,
         fileUrl: filePreviewUrl,
         printerName: selectedPrinter,
         copies: copies,
-        paperSize: "Short Bond",  // Always use Short Bond
-        paperWidth: 8.5,          // Short Bond width in inches
-        paperHeight: 11,          // Short Bond height in inches
-        isColor,
-        orientation,
-        totalPages,
+        isColor: isColor,
+        totalPages: actualPages,
+        status: "pending",
+        progress: 0,
+        statusMessage: "Initializing print job...",
+        createdAt: Date.now(),
         price: calculatedPrice,
-        progress: 5,
-        printStatus: "Preparing print job...",
-        status: "Processing",
-        fileType: fileExtension,
-        timestamp: new Date().toISOString(),
-        colorAnalysis: colorAnalysis,
-        hasColorContent: colorAnalysis?.hasColoredPages || false,
-        colorPageCount: colorAnalysis?.coloredPages?.length || 0
+        // Only include colorAnalysis if it exists
+        ...(colorAnalysis && { colorAnalysis })
       });
 
       // Update coins immediately
@@ -1026,22 +1181,31 @@ const Usb = () => {
       });
       setAvailableCoins(updatedCoins);
 
-      // Send print request to backend
-      const response = await axios.post('http://localhost:5000/api/print', {
+      // Prepare the print request data
+      const printData = {
         fileUrl: filePreviewUrl,
-        fileName: fileName,
+        fileName: fileToUpload.name,
         printerName: selectedPrinter,
         copies: copies,
         isColor: isColor,
-        hasColorContent: colorAnalysis?.hasColoredPages || false,
-        colorPageCount: colorAnalysis?.coloredPages?.length || 0,
         orientation: orientation,
         selectedSize: "Short Bond",
         printJobId: printJobId,
-        jobId: printJobId,
-        totalPages: totalPages,
+        totalPages: actualPages,
         price: calculatedPrice
-      });
+      };
+
+      // Only add color analysis data if it exists
+      if (colorAnalysis && colorAnalysis.hasColoredPages !== undefined) {
+        printData.hasColorContent = colorAnalysis.hasColoredPages;
+        printData.colorPageCount = colorAnalysis.coloredPages?.length || 0;
+      }
+
+      // Immediately redirect to printer page
+      navigate('/printer');
+
+      // Send print request to backend
+      const response = await axios.post('http://localhost:5000/api/print', printData);
 
       if (response.data.status === 'error') {
         throw new Error(response.data.error || 'Failed to print document');
@@ -1328,39 +1492,44 @@ const Usb = () => {
       {/* USB Guide Modal */}
       {showModal && (
         <div className="modal modal-open">
-          <div className="modal-box max-w-3xl">
-            <h3 className="font-bold text-lg mb-4">How to Print from USB</h3>
-            <div className="space-y-4">
-              <div className="flex items-start gap-3">
-                <div className="badge badge-primary">1</div>
-                <p>Connect your USB drive - your files will appear automatically</p>
+          <div className="modal-box relative max-w-3xl bg-base-100">
+            <h3 className="text-2xl font-bold text-primary mb-8">How to Print from USB</h3>
+            <div className="space-y-6">
+              <div className="flex items-start gap-4">
+                <div className="badge badge-lg badge-primary">1</div>
+                <p className="text-base-content/80 text-lg">Connect your USB drive - your files will appear automatically</p>
               </div>
-              <div className="flex items-start gap-3">
-                <div className="badge badge-primary">2</div>
-                <p>Click on a file from your USB drive to select it</p>
+              <div className="flex items-start gap-4">
+                <div className="badge badge-lg badge-primary">2</div>
+                <p className="text-base-content/80 text-lg">Click on a file from your USB drive to select it</p>
               </div>
-              <div className="flex items-start gap-3">
-                <div className="badge badge-primary">3</div>
-                <p>Choose your desired printer and print settings</p>
+              <div className="flex items-start gap-4">
+                <div className="badge badge-lg badge-primary">3</div>
+                <p className="text-base-content/80 text-lg">Choose your desired printer and print settings</p>
               </div>
-              <div className="flex items-start gap-3">
-                <div className="badge badge-primary">4</div>
-                <p>Preview your document to make sure it looks correct</p>
+              <div className="flex items-start gap-4">
+                <div className="badge badge-lg badge-primary">4</div>
+                <p className="text-base-content/80 text-lg">Preview your document to make sure it looks correct</p>
               </div>
-              <div className="flex items-start gap-3">
-                <div className="badge badge-primary">5</div>
-                <p>Check the smart price to ensure you have enough coins</p>
+              <div className="flex items-start gap-4">
+                <div className="badge badge-lg badge-primary">5</div>
+                <p className="text-base-content/80 text-lg">Check the smart price to ensure you have enough coins</p>
               </div>
-              <div className="flex items-start gap-3">
-                <div className="badge badge-primary">6</div>
-                <p>Click the Print button to send your document to the printer</p>
+              <div className="flex items-start gap-4">
+                <div className="badge badge-lg badge-primary">6</div>
+                <p className="text-base-content/80 text-lg">Click the Print button to send your document to the printer</p>
               </div>
             </div>
-            <div className="modal-action">
-              <button className="btn" onClick={() => setShowModal(false)}>Close</button>
+            <div className="modal-action mt-8">
+              <button 
+                className="btn btn-primary btn-wide" 
+                onClick={() => setShowModal(false)}
+              >
+                Got it!
+              </button>
             </div>
           </div>
-          <div className="modal-backdrop" onClick={() => setShowModal(false)}></div>
+          <div className="modal-backdrop bg-neutral/80" onClick={() => setShowModal(false)}></div>
         </div>
       )}
     </div>

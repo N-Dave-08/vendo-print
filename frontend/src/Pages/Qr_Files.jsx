@@ -17,6 +17,7 @@ import PrintSettings from "../components/common/PrintSettings";
 import axios from "axios";
 import { loadPDF } from '../utils/pdfjs-init';
 import SmartPriceLabel from "../components/qr/smart_price";
+import { deleteFile } from '../utils/fileOperations';
 
 // Function to get the appropriate icon based on file type
 const getFileIcon = (fileName, size = "normal") => {
@@ -205,15 +206,10 @@ const QRUpload = () => {
             totalPages: data[key].totalPages || 1
           };
 
-          // Log file data for debugging
-          if (fileData.fileName.toLowerCase().endsWith('.pdf')) {
-            // Removed PDF loading log
-          }
-
           return fileData;
         })
-          // Filter to only include files that were uploaded via QR
-          .filter(file => file.uploadSource === "qr");
+        // Filter to only include files that were uploaded via QR
+        .filter(file => file.uploadSource === "qr");
 
         setUploadedFiles(filesArray);
       } else {
@@ -229,117 +225,157 @@ const QRUpload = () => {
     if (!window.confirm("Are you sure you want to delete this file?")) return;
 
     try {
-      // Extract the full path from the fileUrl
-      const fileUrlObj = new URL(fileUrl);
-      const pathFromUrl = decodeURIComponent(fileUrlObj.pathname.split('/o/')[1].split('?')[0]);
-
-      // Delete from Storage
-      const fileRef = storageRef(storage, pathFromUrl);
-      await deleteObject(fileRef);
-
-      // Delete from Database
+      // Try to remove from database first
       await remove(dbRef(realtimeDb, `uploadedFiles/${fileId}`));
+
+      // Then try to remove from storage if URL exists
+      if (fileUrl) {
+        try {
+          const fileUrlObj = new URL(fileUrl);
+          const pathFromUrl = decodeURIComponent(fileUrlObj.pathname.split('/o/')[1].split('?')[0]);
+          const fileRef = storageRef(storage, pathFromUrl);
+          await deleteObject(fileRef).catch(error => {
+            // Ignore not found errors as the file might have been already deleted
+            if (error.code !== 'storage/object-not-found') {
+              console.error('Error deleting from storage:', error);
+            }
+          });
+        } catch (storageError) {
+          console.error('Error with storage deletion:', storageError);
+          // Continue since we already deleted from database
+        }
+      }
 
       // Clear selection if deleted file was selected
       if (selectedFile.fileUrl === fileUrl) {
-        setSelectedFile({ fileName: "", fileUrl: "", totalPages: 1, hasColorPages: false, colorPageCount: 0, colorAnalysis: null });
+        setSelectedFile({
+          fileName: "",
+          fileUrl: "",
+          totalPages: 1,
+          hasColorPages: false,
+          colorPageCount: 0,
+          colorAnalysis: null
+        });
       }
     } catch (error) {
       console.error("Error deleting file:", error);
-      alert("Failed to delete file. Please try again.");
+      alert("Error deleting file. Please try again or refresh the page.");
     }
   };
 
   // Handle file selection
   const handleSelectFile = async (file) => {
     console.log("Selected file:", file);
+    setIsLoading(true); // Add loading state while analyzing
 
     try {
-      // Create an iframe for color analysis
-      const iframe = document.createElement('iframe');
-      iframe.style.display = 'none';
-      iframe.src = '/proxy-pdf.html';
-      document.body.appendChild(iframe);
-
-      // Wait for iframe to load
-      await new Promise((resolve) => {
-        iframe.onload = resolve;
-      });
-
-      // Send message to iframe with PDF URL
-      iframe.contentWindow.postMessage({
-        type: 'analyzePDF',
-        pdfUrl: file.fileUrl,
-        filename: file.fileName
-      }, '*');
-
-      // Listen for color analysis results
-      const colorAnalysisResult = await new Promise((resolve) => {
-        window.addEventListener('message', function onMessage(event) {
-          if (event.data.type === 'colorAnalysisComplete') {
-            window.removeEventListener('message', onMessage);
-            document.body.removeChild(iframe);
-            resolve(event.data);
-          }
-        });
-      });
-
-      console.log('Color analysis results:', colorAnalysisResult);
-
-      // Determine the proper file type
-      let fileType = 'application/pdf';
-
-      // Check if this is a converted DOCX file
-      if (file.originalType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" &&
-        file.fileType === "application/pdf") {
-        fileType = "application/pdf";
-      }
-      // Otherwise detect based on file extension
-      else if (file.fileName.toLowerCase().endsWith('.pdf')) {
-        fileType = "application/pdf";
-      }
-      else if (file.fileName.toLowerCase().endsWith('.docx') || file.fileName.toLowerCase().endsWith('.doc')) {
-        fileType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-      }
-      else if (file.fileName.toLowerCase().match(/\.(jpg|jpeg|png|gif|webp)$/)) {
-        fileType = "image/" + file.fileName.toLowerCase().split('.').pop().replace('jpg', 'jpeg');
-      }
-
-      // Set the file with color analysis results
-      setSelectedFile({
+      // Set initial file data
+      const initialFileData = {
         fileName: file.fileName,
         fileUrl: file.fileUrl,
         totalPages: file.totalPages || 1,
-        fileType: fileType,
-        hasColorPages: colorAnalysisResult.results.hasColoredPages,
-        colorPageCount: colorAnalysisResult.results.coloredPageCount,
-        colorAnalysis: colorAnalysisResult.results
-      });
-
-      // If there are colored pages, automatically set isColor to true
-      if (colorAnalysisResult.results.hasColoredPages) {
-        setIsColor(true);
-      }
-
-      console.log(`File selected with ${file.totalPages} pages and type ${fileType}`);
-
-    } catch (error) {
-      console.error("Error handling file selection:", error);
-      // Set file without color analysis in case of error
-      setSelectedFile({
-        fileName: file.fileName,
-        fileUrl: file.fileUrl,
-        totalPages: file.totalPages || 1,
-        fileType: file.fileType,
+        fileType: getFileType(file),
         hasColorPages: false,
         colorPageCount: 0,
         colorAnalysis: null
-      });
+      };
+      setSelectedFile(initialFileData);
+
+      // Only perform color analysis for PDFs
+      if (file.fileName.toLowerCase().endsWith('.pdf')) {
+        try {
+          // Create an iframe for color analysis
+          const iframe = document.createElement('iframe');
+          iframe.style.display = 'none';
+          document.body.appendChild(iframe);
+          
+          // Set up message listener before loading the iframe
+          const colorAnalysisPromise = new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+              reject(new Error('Color analysis timed out'));
+            }, 10000); // 10 second timeout
+
+            window.addEventListener('message', function onMessage(event) {
+              if (event.data.type === 'colorAnalysisComplete') {
+                clearTimeout(timeoutId);
+                window.removeEventListener('message', onMessage);
+                resolve(event.data);
+              }
+            });
+          });
+
+          // Load the proxy page
+          iframe.src = '/proxy-pdf.html';
+          await new Promise(resolve => iframe.onload = resolve);
+
+          // Send the PDF for analysis
+          iframe.contentWindow.postMessage({
+            type: 'analyzePDF',
+            pdfUrl: file.fileUrl,
+            filename: file.fileName
+          }, '*');
+
+          // Wait for analysis results
+          const colorAnalysisResult = await colorAnalysisPromise;
+          console.log('Color analysis results:', colorAnalysisResult);
+
+          // Update file data with color analysis
+          setSelectedFile(prev => ({
+            ...prev,
+            hasColorPages: colorAnalysisResult.results.hasColoredPages,
+            colorPageCount: colorAnalysisResult.results.coloredPageCount,
+            colorAnalysis: colorAnalysisResult.results
+          }));
+
+          // If there are colored pages, automatically set isColor to true
+          if (colorAnalysisResult.results.hasColoredPages) {
+            setIsColor(true);
+          }
+
+          // Clean up iframe
+          document.body.removeChild(iframe);
+        } catch (analysisError) {
+          console.error('Color analysis failed:', analysisError);
+          // Continue with basic file data if color analysis fails
+        }
+      }
+    } catch (error) {
+      console.error("Error handling file selection:", error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Handle print dialog
-  const openPrintDialog = () => {
+  // Helper function to determine file type
+  const getFileType = (file) => {
+    if (file.originalType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" &&
+        file.fileType === "application/pdf") {
+      return "application/pdf";
+    }
+    
+    const extension = file.fileName.toLowerCase().split('.').pop();
+    switch (extension) {
+      case 'pdf':
+        return "application/pdf";
+      case 'doc':
+      case 'docx':
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+      case 'jpg':
+      case 'jpeg':
+        return "image/jpeg";
+      case 'png':
+        return "image/png";
+      case 'gif':
+        return "image/gif";
+      case 'webp':
+        return "image/webp";
+      default:
+        return "application/octet-stream";
+    }
+  };
+
+  // Print dialog handlers
+  const handlePrintClick = () => {
     if (selectedFile.fileUrl) {
       setIsPrintDialogOpen(true);
     } else {
@@ -347,7 +383,7 @@ const QRUpload = () => {
     }
   };
 
-  const closePrintDialog = () => {
+  const handleClosePrintDialog = () => {
     setIsPrintDialogOpen(false);
   };
 
@@ -558,8 +594,8 @@ const QRUpload = () => {
                     <div className="p-3 border-b border-base-300 bg-base-100">
                       <div className="flex items-center justify-between">
                         <span className="text-sm text-gray-600">Total Pages</span>
-                        <span className="font-medium">{selectedFile.totalPages || 1}</span>
-              </div>
+                        <span className="font-medium">{selectedFile.colorAnalysis?.pageAnalysis?.length || selectedFile.totalPages || 1}</span>
+                      </div>
                     </div>
                     
                     {/* Page Breakdown */}
@@ -574,26 +610,32 @@ const QRUpload = () => {
                             {page.hasColor && (
                               <span className="badge badge-sm badge-primary badge-outline">Color</span>
                             )}
-              </div>
+                          </div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs text-gray-500">
                               {page.hasColor ? '₱12.00' : '₱10.00'}
                             </span>
-            </div>
+                          </div>
                         </div>
                       ))}
-          </div>
+                    </div>
 
                     {/* Summary Footer */}
                     <div className="p-3 border-t border-base-300 bg-base-200">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium text-gray-600">Color Pages</span>
-                          <span className="badge badge-sm badge-primary">{selectedFile.colorPageCount || 0}</span>
+                          <span className="badge badge-sm badge-primary">
+                            {selectedFile.colorAnalysis?.pageAnalysis?.filter(page => page.hasColor).length || 0}
+                          </span>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium text-gray-600">B&W Pages</span>
-                          <span className="badge badge-sm">{(selectedFile.totalPages || 1) - (selectedFile.colorPageCount || 0)}</span>
+                          <span className="badge badge-sm">
+                            {selectedFile.colorAnalysis?.pageAnalysis ? 
+                              selectedFile.colorAnalysis.pageAnalysis.filter(page => !page.hasColor).length :
+                              selectedFile.totalPages || 1}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -613,12 +655,16 @@ const QRUpload = () => {
                     <div className="flex-1 min-w-0">
                       <h3 className="font-medium truncate">{selectedFile.fileName}</h3>
                       <p className="text-sm text-gray-500">
-                        {selectedFile.totalPages} page{selectedFile.totalPages !== 1 ? 's' : ''}
+                        {selectedFile.colorAnalysis?.pageAnalysis?.length || selectedFile.totalPages || 1} {' '}
+                        {(selectedFile.colorAnalysis?.pageAnalysis?.length || selectedFile.totalPages || 1) === 1 ? 'page' : 'pages'}
+                        {selectedFile.colorAnalysis?.pageAnalysis?.some(page => page.hasColor) && 
+                          ` • ${selectedFile.colorAnalysis.pageAnalysis.filter(page => page.hasColor).length} color`
+                        }
                       </p>
                     </div>
                     <button
                       className="btn btn-primary gap-2 shrink-0"
-                      onClick={() => setIsPrintDialogOpen(true)}
+                      onClick={handlePrintClick}
                     >
                       <BsPrinterFill className="w-4 h-4" />
                       Print
@@ -759,7 +805,7 @@ const QRUpload = () => {
               </div>
             <button
                 className="btn btn-sm btn-circle"
-              onClick={() => setIsPrintDialogOpen(false)}
+              onClick={handleClosePrintDialog}
             >
                 <IoClose size={16} />
             </button>
@@ -1030,7 +1076,7 @@ const QRUpload = () => {
                 {/* Action Buttons - Fixed at bottom */}
                 <div className="p-4 border-t border-base-200 bg-white shrink-0">
                   <div className="flex gap-3">
-                    <button className="btn flex-1 min-h-[48px]" onClick={closePrintDialog}>
+                    <button className="btn flex-1 min-h-[48px]" onClick={handleClosePrintDialog}>
                 Cancel
               </button>
                     <button 

@@ -15,10 +15,10 @@ const PageSize = ({ selectedSize, setSelectedSize }) => {
 
   return (
     <div className="flex flex-col space-y-4 mt-6">
-      <div className="flex items-center space-x-4">
-        <p className="text-2xl font-bold text-[#31304D]">Size:</p>
+      <div className="flex items-center gap-4">
+        <p className="text-2xl font-bold text-primary">Size:</p>
         <select
-          className="w-72 p-2 border-2 border-[#31304D] rounded-lg text-lg font-bold text-[#31304D]"
+          className="select select-bordered select-primary w-72 text-lg font-medium"
           value={selectedSize}
           onChange={(e) => handleSizeChange(e.target.value)}
         >
@@ -36,31 +36,31 @@ const PageSize = ({ selectedSize, setSelectedSize }) => {
 
       {/* Show custom input fields only when "Custom" is selected */}
       {selectedSize === "Custom" && (
-        <div className="flex space-x-4">
-          <div className="flex flex-col">
-            <label className="text-lg font-semibold text-[#31304D]">
-              Width (inches):
+        <div className="flex gap-4 items-center">
+          <div className="form-control">
+            <label className="label">
+              <span className="label-text font-medium">Width (inches)</span>
             </label>
             <input
               type="number"
               step="0.1"
+              min="0"
+              className="input input-bordered input-primary w-32"
               value={customWidth}
               onChange={(e) => setCustomWidth(e.target.value)}
-              className="w-32 p-2 border-2 border-[#31304D] rounded-lg text-lg font-bold text-[#31304D]"
-              placeholder="Width"
             />
           </div>
-          <div className="flex flex-col">
-            <label className="text-lg font-semibold text-[#31304D]">
-              Height (inches):
+          <div className="form-control">
+            <label className="label">
+              <span className="label-text font-medium">Height (inches)</span>
             </label>
             <input
               type="number"
               step="0.1"
+              min="0"
+              className="input input-bordered input-primary w-32"
               value={customHeight}
               onChange={(e) => setCustomHeight(e.target.value)}
-              className="w-32 p-2 border-2 border-[#31304D] rounded-lg text-lg font-bold text-[#31304D]"
-              placeholder="Height"
             />
           </div>
         </div>

@@ -19,8 +19,8 @@ import FormData from 'form-data';
 // Import the conversion service
 import { convertDocxToPdf, cleanupTempFiles, checkLibreOffice } from '../services/conversion_service.js';
 // Import Firebase storage reference
-import { storage } from "../firebase/firebase-config.js";
-import { ref as storageRef, getDownloadURL, uploadBytes } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage } from '../firebase/firebase-config.js';
 import axios from 'axios';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -306,86 +306,93 @@ BackendRoutes.post('/xerox/print', async (req, res) => {
 });
 
 // Update the DOCX to PDF conversion route
-BackendRoutes.post('/convert-docx', upload.single('file'), async (req, res) => {
-  console.log('✅ Received conversion request');
+BackendRoutes.post('/convert-docx', async (req, res) => {
+  // Set CORS headers
+  res.set({
+    'Access-Control-Allow-Origin': 'http://localhost:5173',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Credentials': 'true'
+  });
 
-  if (!req.file) {
-    console.error('❌ No file uploaded');
-    return res.status(400).json({
-      status: 'error',
-      message: 'No file uploaded'
-    });
+  // Handle preflight request
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
   }
 
-  const fileExtension = path.extname(req.file.originalname).toLowerCase();
-  if (fileExtension !== '.docx' && fileExtension !== '.doc') {
-    console.error(`❌ Invalid file type: ${fileExtension}`);
-    return res.status(400).json({
-      status: 'error',
-      message: 'Only DOCX and DOC files are supported'
-    });
-  }
-
+  console.log('Received conversion request:', req.body);
+  
   try {
-    // Check LibreOffice installation
-    console.log('🔍 Checking for LibreOffice...');
+    const { filePath } = req.body;
+    
+    if (!filePath) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'No file path provided' 
+      });
+    }
+
+    // Check if file exists and is accessible
+    try {
+      await fs.promises.access(filePath, fs.constants.R_OK);
+    } catch (error) {
+      return res.status(404).json({ 
+        status: 'error',
+        message: `File not found or not accessible at path: ${filePath}` 
+      });
+    }
+
+    // Check if LibreOffice is installed
     await checkLibreOffice();
 
-    // Convert the file
-    console.log(`🔄 Converting ${req.file.originalname} to PDF...`);
-    const pdfPath = await convertDocxToPdf(req.file.path);
+    // Convert DOCX to PDF
+    console.log('Converting file:', filePath);
+    const pdfPath = await convertDocxToPdf(filePath, (progress) => {
+      console.log('Conversion progress:', progress);
+    });
 
-    if (!pdfPath || !fs.existsSync(pdfPath)) {
+    if (!fs.existsSync(pdfPath)) {
       throw new Error('PDF conversion failed - output file not found');
     }
 
-    // Upload the converted PDF to Firebase Storage
-    console.log('📤 Uploading converted PDF to Firebase Storage...');
+    // Upload PDF to Firebase Storage
     const pdfFileName = path.basename(pdfPath);
-    const storagePath = `uploads/${Date.now()}_${pdfFileName}`;
-
-    // Create a reference to Firebase Storage
-    const pdfRef = storageRef(storage, storagePath);
-
-    // Read the PDF file
-    const pdfBuffer = fs.readFileSync(pdfPath);
-
-    // Upload to Firebase Storage
-    await uploadBytes(pdfRef, pdfBuffer, {
+    const storageRef = ref(storage, `converted/${pdfFileName}`);
+    
+    const metadata = {
       contentType: 'application/pdf',
       customMetadata: {
-        originalName: req.file.originalname,
+        originalName: path.basename(filePath),
         convertedFrom: 'docx'
       }
-    });
+    };
 
-    // Get the download URL
-    const pdfUrl = await getDownloadURL(pdfRef);
+    const fileBuffer = fs.readFileSync(pdfPath);
+    await uploadBytes(storageRef, fileBuffer, metadata);
+    const pdfUrl = await getDownloadURL(storageRef);
 
     // Clean up temporary files
-    console.log('🧹 Cleaning up temporary files...');
-    await cleanupTempFiles(req.file.path, pdfPath);
+    try {
+      fs.unlinkSync(pdfPath);
+    } catch (error) {
+      console.error('Error cleaning up PDF file:', error);
+    }
 
-    // Return the Firebase Storage URL
-    res.json({
+    // Return the proxied URL instead of direct Firebase Storage URL
+    const proxyUrl = `http://localhost:5000/api/proxy-pdf?url=${encodeURIComponent(pdfUrl)}`;
+    
+    res.json({ 
       status: 'success',
-      message: 'File converted successfully',
-      pdfUrl
+      pdfUrl: proxyUrl 
     });
 
   } catch (error) {
-    console.error('❌ Conversion error:', error);
-    res.status(500).json({
+    console.error('Error in /convert-docx:', error);
+    
+    res.status(500).json({ 
       status: 'error',
-      message: error.message || 'Failed to convert file'
+      message: error.message || 'Error converting file'
     });
-
-    // Clean up on error
-    try {
-      await cleanupTempFiles(req.file.path);
-    } catch (cleanupError) {
-      console.error('Cleanup error:', cleanupError);
-    }
   }
 });
 
@@ -444,7 +451,7 @@ BackendRoutes.post('/docker-convert-docx', upload.single('file'), async (req, re
     const storagePath = `uploads/${pdfFileName}`;
 
     // Create a reference to Firebase Storage
-    const pdfRef = storageRef(storage, storagePath);
+    const pdfRef = ref(storage, storagePath);
 
     // Upload to Firebase Storage using uploadBytes instead of put
     await uploadBytes(pdfRef, pdfBuffer, {
@@ -501,7 +508,7 @@ BackendRoutes.get('/refresh-url', async (req, res) => {
 
     try {
       // Get a fresh URL from Firebase Storage with custom token duration
-      const fileRef = storageRef(storage, path);
+      const fileRef = ref(storage, path);
 
       // Use getDownloadURL with custom settings
       const freshUrl = await getDownloadURL(fileRef);
@@ -570,7 +577,7 @@ BackendRoutes.get('/proxy-pdf', async (req, res) => {
         const urlObj = new URL(url);
         const pathFromUrl = decodeURIComponent(urlObj.pathname.split('/o/')[1].split('?')[0]);
         const fileName = pathFromUrl.split('/').pop(); // Get the filename from the path
-        const fileRef = storageRef(storage, pathFromUrl);
+        const fileRef = ref(storage, pathFromUrl);
 
         console.log('📄 Processing Firebase Storage PDF:', fileName);
 
@@ -679,20 +686,27 @@ BackendRoutes.get('/read-file', async (req, res) => {
       return res.status(400).json({ error: 'No file path provided' });
     }
     
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
+    console.log('Attempting to read file:', filePath);
+    
+    // Normalize path for Windows
+    const normalizedPath = path.normalize(filePath);
+    
+    // Check if file exists using sync operation
+    if (!fs.existsSync(normalizedPath)) {
+      console.error('File not found:', normalizedPath);
       return res.status(404).json({ error: 'File not found' });
     }
     
-    // Get file stats to determine MIME type
-    const stats = fs.statSync(filePath);
+    // Get file stats synchronously
+    const stats = fs.statSync(normalizedPath);
     
     if (!stats.isFile()) {
+      console.error('Path is not a file:', normalizedPath);
       return res.status(400).json({ error: 'Path is not a file' });
     }
     
     // Determine MIME type based on file extension
-    const ext = path.extname(filePath).toLowerCase();
+    const ext = path.extname(normalizedPath).toLowerCase();
     let mimeType = 'application/octet-stream'; // Default MIME type
     
     const mimeTypes = {
@@ -712,15 +726,31 @@ BackendRoutes.get('/read-file', async (req, res) => {
     
     // Set appropriate headers
     res.setHeader('Content-Type', mimeType);
-    res.setHeader('Content-Disposition', `inline; filename="${path.basename(filePath)}"`);
+    res.setHeader('Content-Length', stats.size);
+    res.setHeader('Content-Disposition', `inline; filename="${path.basename(normalizedPath)}"`);
     
-    // Stream the file to the response
-    const fileStream = fs.createReadStream(filePath);
+    console.log('Streaming file:', normalizedPath);
+    
+    // Use createReadStream with explicit encoding for text files
+    const isTextFile = ['.txt', '.doc', '.docx'].includes(ext);
+    const fileStream = fs.createReadStream(normalizedPath, isTextFile ? { encoding: 'utf8' } : undefined);
+    
+    // Handle stream errors
+    fileStream.on('error', (error) => {
+      console.error('Error streaming file:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to read file' });
+      }
+    });
+    
+    // Pipe the file to the response
     fileStream.pipe(res);
     
   } catch (error) {
     console.error('Error reading file:', error);
-    res.status(500).json({ error: 'Failed to read file' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to read file' });
+    }
   }
 });
 

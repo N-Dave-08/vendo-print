@@ -15,65 +15,41 @@ const __dirname = path.dirname(__filename);
 dotenv.config();
 
 const app = express();
+const port = process.env.PORT || 5000;
 
-// Increase payload limit for file uploads
-app.use(express.json({ limit: "100mb" }));
-app.use(express.urlencoded({ limit: "100mb", extended: true }));
+// Create HTTP server
+const server = http.createServer(app);
 
-// Configure CORS to allow all frontend origins including WebSocket
+// Enable CORS for all routes
 app.use(cors({
-  origin: true, // Allow any origin in development
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Connection", "Upgrade", "Sec-WebSocket-Key", "Sec-WebSocket-Version"],
+  origin: 'http://localhost:5173', // Frontend URL
   credentials: true
 }));
 
-// Create uploads and temp directories if they don't exist
-import fs from "fs";
-const uploadsDir = path.join(__dirname, "uploads");
-const tempDir = path.join(__dirname, "..", "temp");
-const scansDir = path.join(__dirname, "printer", "scans");
+// Parse JSON bodies
+app.use(express.json());
 
-[uploadsDir, tempDir, scansDir].forEach(dir => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-    console.log(`Created directory: ${dir}`);
-  }
-});
+// Use backend routes
+app.use('/api', BackendRoutes);
 
-// Request logger middleware
-app.use((req, res, next) => {
-  const start = Date.now();
-  console.log(`📥 ${req.method} ${req.url} - Request received`);
+// Initialize USB detection service
+console.log('Initializing USB detection service...');
+const wss = await initUsbDetectionService(server);
 
-  // Log request body for POST/PUT requests
-  if ((req.method === 'POST' || req.method === 'PUT') && req.body) {
-    // Don't log full file data if present
-    const sanitizedBody = { ...req.body };
-    if (sanitizedBody.fileUrl) {
-      sanitizedBody.fileUrl = '[FILE URL REDACTED FOR LOGGING]';
-    }
-    console.log(`📦 Request body: ${JSON.stringify(sanitizedBody)}`);
-  }
+if (wss) {
+  console.log('✅ USB detection service initialized successfully');
+} else {
+  console.error('❌ Failed to initialize USB detection service');
+}
 
-  // Track response
-  const originalSend = res.send;
-  res.send = function (data) {
-    const duration = Date.now() - start;
-    console.log(`📤 ${req.method} ${req.url} - Response sent (${res.statusCode}) [${duration}ms]`);
-    return originalSend.apply(res, arguments);
-  };
-
-  next();
-});
-
-// Add USB detection API endpoints
+// Add USB detection API endpoints with better error handling
 app.get("/api/usb-drives", (req, res) => {
   try {
     const drives = getConnectedDrives();
+    console.log('📂 Retrieved USB drives:', drives);
     res.json({ status: "success", drives });
   } catch (error) {
-    console.error("Error getting USB drives:", error);
+    console.error("❌ Error getting USB drives:", error);
     res.status(500).json({ status: "error", message: "Failed to get USB drives" });
   }
 });
@@ -81,51 +57,43 @@ app.get("/api/usb-drives", (req, res) => {
 app.get("/api/usb-drives/:drivePath/refresh", async (req, res) => {
   try {
     const drivePath = req.params.drivePath;
+    console.log('🔄 Refreshing drive:', drivePath);
+    
     const files = await refreshDriveFiles(drivePath);
     
     if (files === null) {
+      console.error('❌ Drive not found:', drivePath);
       return res.status(404).json({ status: "error", message: "Drive not found" });
     }
     
+    console.log(`✅ Successfully refreshed drive. Found ${files.length} files`);
     res.json({ status: "success", files });
   } catch (error) {
-    console.error("Error refreshing USB drive files:", error);
+    console.error("❌ Error refreshing USB drive files:", error);
     res.status(500).json({ status: "error", message: "Failed to refresh USB drive files" });
   }
 });
 
-// Use default route
-app.use("/api", BackendRoutes);
-
-app.get("/", (req, res) => {
-  res.send("Welcome to the VendoPrint server");
+// Start the server
+server.listen(port, () => {
+  console.log(`🚀 Server running on port ${port}`);
 });
 
-// Create HTTP server with increased timeout
-const server = http.createServer(app);
+// Handle server shutdown
+process.on('SIGTERM', () => {
+  console.log('Received SIGTERM. Closing server...');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
 
-// Increase timeout for the server to 5 minutes for long-running operations
-server.timeout = 300000; // 5 minutes in milliseconds
-
-// Initialize USB detection service with our server (now using an async IIFE)
-(async () => {
-  try {
-    await initUsbDetectionService(server);
-    // Keep this log since it's useful to know when the service is initialized
-    console.log("USB detection service started");
-  } catch (error) {
-    console.error("Error starting USB detection service:", error);
-  }
-})();
- 
-// Use explicit port 5000 if not provided in env
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📄 API endpoint: http://localhost:${PORT}/api`);
-  console.log(`⚙️ Server timeout set to ${server.timeout / 1000} seconds`);
-  // Remove detailed WebSocket logging
-  // console.log(`📀 USB detection active - WebSocket: ws://localhost:${PORT}`);
+process.on('SIGINT', () => {
+  console.log('Received SIGINT. Closing server...');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
 });
 
 

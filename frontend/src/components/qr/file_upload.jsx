@@ -14,14 +14,14 @@ import axios from 'axios';
 const FileUpload = () => {
   const [fileToUpload, setFileToUpload] = useState(null);
   const [totalPages, setTotalPages] = useState(1);
-  const [uploadStatus, setUploadStatus] = useState(""); // "uploading", ""
+  const [uploadStatus, setUploadStatus] = useState(""); // "uploading", "success", ""
   const [isModalOpen, setIsModalOpen] = useState(true);
   const [dragActive, setDragActive] = useState(false);
   const [filePreviewUrl, setFilePreviewUrl] = useState("");
   const [uploadProgress, setUploadProgress] = useState(0);
   const [convertingDocx, setConvertingDocx] = useState(false);
-
-  const navigate = useNavigate();
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
 
   const allowedTypes = [
     "application/pdf",
@@ -852,7 +852,7 @@ const FileUpload = () => {
     return getFileIcon();
   };
 
-  // Add a helper function to handle successful uploads
+  // Update handleUploadSuccess to show success message instead of redirecting
   const handleUploadSuccess = async (fileUrl, fileName, fileType, originalFileName = null) => {
     setFilePreviewUrl(fileUrl);
     setUploadStatus("");
@@ -864,40 +864,81 @@ const FileUpload = () => {
       // Create a file entry in the database
       const newFileRef = push(dbRef(realtimeDb, "uploadedFiles"));
       await set(newFileRef, {
-        fileName: displayFileName, // Use the display filename (original DOCX name if provided)
+        fileName: displayFileName,
         fileUrl: fileUrl,
         uploadedAt: new Date().toISOString(),
         fileType: fileType,
         totalPages: totalPages,
         uploadSource: "qr",
         status: "ready",
-        isConverted: !!originalFileName, // Flag to indicate it's a converted file
-        originalFormat: originalFileName ? "docx" : null // Store the original format if converted
+        isConverted: !!originalFileName,
+        originalFormat: originalFileName ? "docx" : null
       });
 
-      console.log(`File uploaded successfully: ${displayFileName}`);
+      // Show success message
+      setSuccessMessage(`${displayFileName} uploaded successfully!`);
+      setShowSuccess(true);
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => {
+        setShowSuccess(false);
+        setSuccessMessage("");
+        // Clear the file input
+        setFileToUpload(null);
+        setFilePreviewUrl("");
+        setUploadProgress(0);
+      }, 3000);
 
-      // Redirect to the QR page with the file details as query parameters
-      navigate(`/qr?name=${encodeURIComponent(displayFileName)}&url=${encodeURIComponent(fileUrl)}&pages=${totalPages}`);
     } catch (error) {
       console.error("Error finalizing upload:", error);
       alert("Error finalizing upload. Please try again.");
     }
   };
 
-  // Existing uploadFileToFirebase function with progress tracking
+  // Update uploadFileToFirebase to use the new success handling
   const uploadFileToFirebase = async (file) => {
+    try {
+      // Get actual page count for PDFs
+      let pageCount = 1;
+      if (file.type === "application/pdf") {
+        try {
+          const pdfData = await file.arrayBuffer();
+          const pdfDoc = await PDFDocument.load(pdfData);
+          pageCount = pdfDoc.getPageCount();
+          console.log(`PDF has ${pageCount} pages`);
+          setTotalPages(pageCount);
+        } catch (error) {
+          console.error("Error getting PDF page count:", error);
+          // Fallback to estimating pages based on file size
+          const fileSizeInKB = file.size / 1024;
+          pageCount = Math.max(1, Math.ceil(fileSizeInKB / 100));
+        }
+      }
+
+      // Create a unique filename
     const timestamp = Date.now();
-    const storageRef = ref(storage, `uploads/${timestamp}_${file.name}`);
+      const uniqueFileName = `${timestamp}_${file.name}`;
+      const fileRef = ref(storage, `uploads/${uniqueFileName}`);
 
-    // Create upload task
-    const uploadTask = uploadBytesResumable(storageRef, file);
+      // Set metadata including page count
+      const metadata = {
+        contentType: file.type,
+        customMetadata: {
+          public: "true",
+          pageCount: pageCount.toString(),
+          fileName: file.name
+        }
+      };
 
-    // Monitor upload progress
+      // Upload file
+      const uploadTask = uploadBytesResumable(fileRef, file, metadata);
+
     uploadTask.on(
       "state_changed",
       (snapshot) => {
-        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          const progress = Math.round(
+            (snapshot.bytesTransferred / snapshot.totalBytes) * 100
+          );
         setUploadProgress(progress);
       },
       (error) => {
@@ -906,111 +947,182 @@ const FileUpload = () => {
         alert(`Upload failed: ${error.message}`);
       },
       async () => {
-        // Upload complete
+          try {
         const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-        await handleUploadSuccess(downloadURL, file.name, file.type);
-      }
-    );
+            
+            // For PDFs, perform color analysis
+            let colorAnalysisResults = null;
+            if (file.type === "application/pdf") {
+              try {
+                const iframe = document.createElement('iframe');
+                iframe.style.display = 'none';
+                document.body.appendChild(iframe);
+                
+                // Set up message listener for color analysis
+                const colorAnalysisPromise = new Promise((resolve, reject) => {
+                  const timeoutId = setTimeout(() => {
+                    reject(new Error('Color analysis timed out'));
+                  }, 30000); // Increased timeout to 30 seconds for large files
+
+                  window.addEventListener('message', function onMessage(event) {
+                    if (event.data.type === 'colorAnalysisComplete') {
+                      clearTimeout(timeoutId);
+                      window.removeEventListener('message', onMessage);
+                      resolve(event.data.results);
+                    }
+                  });
+                });
+
+                // Load proxy page and analyze PDF
+                iframe.src = '/proxy-pdf.html';
+                await new Promise(resolve => iframe.onload = resolve);
+
+                iframe.contentWindow.postMessage({
+                  type: 'analyzePDF',
+                  pdfUrl: downloadURL,
+                  filename: file.name
+                }, '*');
+
+                colorAnalysisResults = await colorAnalysisPromise;
+                document.body.removeChild(iframe);
+
+                console.log('Color analysis results:', colorAnalysisResults);
+              } catch (analysisError) {
+                console.error('Color analysis failed:', analysisError);
+              }
+            }
+
+            // Create database entry with comprehensive file information
+            const newFileRef = push(dbRef(realtimeDb, "uploadedFiles"));
+            const fileData = {
+              fileName: file.name,
+              fileUrl: downloadURL,
+              fileType: file.type,
+              uploadedAt: new Date().toISOString(),
+              totalPages: pageCount,
+              uploadSource: "qr",
+              status: "ready",
+              isConverted: false
+            };
+
+            // Add color analysis data if available
+            if (colorAnalysisResults && !colorAnalysisResults.error) {
+              fileData.colorAnalysis = {
+                hasColoredPages: colorAnalysisResults.hasColoredPages,
+                coloredPageCount: colorAnalysisResults.coloredPageCount,
+                blackAndWhitePageCount: pageCount - colorAnalysisResults.coloredPageCount,
+                pageDetails: colorAnalysisResults.pageAnalysis?.map(page => ({
+                  pageNumber: page.pageNumber,
+                  hasColor: page.hasColor,
+                  colorPercentage: parseFloat(page.colorPercentage)
+                }))
+              };
+            }
+
+            await set(newFileRef, fileData);
+
+            // Show success message
+            setSuccessMessage(`${file.name} uploaded successfully!`);
+            setShowSuccess(true);
+            
+            // Clear success message and form after 3 seconds
+            setTimeout(() => {
+              setShowSuccess(false);
+              setSuccessMessage("");
+              // Clear the file input
+              setFileToUpload(null);
+              setFilePreviewUrl("");
+              setUploadProgress(0);
+            }, 3000);
+
+          } catch (error) {
+            console.error("Error completing upload:", error);
+            alert("Error completing upload. Please try again.");
+          }
+        }
+      );
+    } catch (error) {
+      console.error("Error uploading file:", error);
+      setUploadStatus("");
+      alert(`Error: ${error.message}`);
+    }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100">
-      {/* Initial info modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-xs">
-          <div className="bg-white p-8 rounded-xl shadow-2xl text-center max-w-md w-full mx-4 transform transition-all">
-            <div className="flex justify-center space-x-4 mb-6">
-              <FileText className="text-red-500 text-4xl" />
-              <FileText className="text-blue-500 text-4xl" />
-              <FileImage className="text-green-500 text-4xl" />
-            </div>
-            <h2 className="text-2xl font-bold mb-4 text-gray-800">Upload Your Document</h2>
-            <p className="mb-6 text-gray-600">
-              Please upload a PDF, DOCX, or image file (JPEG, PNG, GIF, WebP) to continue.
-            </p>
-            <button
-              onClick={() => setIsModalOpen(false)}
-              className="bg-primary hover:bg-primary-dark text-white font-bold py-3 px-6 rounded-lg transition duration-300 ease-in-out transform hover:scale-105"
-            >
-              Got it
-            </button>
-          </div>
+    <div className="min-h-screen bg-base-200 p-6">
+      <div className="max-w-xl mx-auto">
+        <div className="card bg-base-100 shadow-xl">
+          <div className="card-body">
+            <h2 className="card-title text-2xl mb-6">Upload Files</h2>
+
+            {/* Success Message */}
+            {showSuccess && (
+              <div className="alert alert-success mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>{successMessage}</span>
         </div>
       )}
 
-      <div className="bg-white p-8 rounded-xl shadow-xl w-full max-w-md mx-4">
-        <h2 className="text-2xl font-bold mb-6 text-gray-800 text-center">Upload Your File</h2>
-
-        <div
-          className={`relative border-2 ${dragActive ? 'border-primary border-solid' : 'border-dashed border-gray-400'} 
-          rounded-xl p-8 transition-all duration-300 ease-in-out
-          ${dragActive ? 'bg-primary bg-opacity-5' : 'bg-gray-50'}`}
-          onDragEnter={handleDrag}
-          onDragLeave={handleDrag}
+            {/* File Upload Area */}
+            <div
+              className={`border-2 border-dashed rounded-lg p-8 text-center ${
+                dragActive ? "border-primary bg-primary/5" : "border-base-300 hover:border-primary"
+              }`}
           onDragOver={handleDrag}
+              onDragLeave={handleDrag}
           onDrop={handleDrop}
         >
+              {!fileToUpload ? (
+                <div className="flex flex-col items-center">
+                  <Upload size={40} className="text-base-content/50 mb-4" />
+                  <p className="mb-2 text-base-content/70">Drag and drop a file here, or click to browse</p>
+                  <p className="text-sm text-base-content/50 mb-4">Supported formats: PDF, Word, Images</p>
           <input
             type="file"
-            accept=".pdf,.docx,.jpg,.jpeg,.png,.gif,.webp"
+                    id="file-upload"
             className="hidden"
             onChange={handleFileChange}
-            id="file-upload"
-          />
-          <label
-            htmlFor="file-upload"
-            className="flex flex-col items-center cursor-pointer"
-          >
-            <Upload
-              className={`text-4xl mb-4 ${dragActive ? 'text-primary' : 'text-gray-400'}`}
-            />
-            <p className="text-center text-gray-600">
-              <span className="text-primary font-semibold">Click to upload</span> or drag and drop
-              <br />
-              <span className="text-sm">PDF, DOCX, or image files</span>
-            </p>
-          </label>
+                    accept={allowedTypes.join(",")}
+                  />
+                  <button
+                    onClick={() => document.getElementById("file-upload").click()}
+                    className="btn btn-primary"
+                  >
+                    Browse Files
+                  </button>
         </div>
+              ) : (
+                <div className="flex flex-col items-center">
+                  {/* File Preview */}
+                  <div className="mb-4">{getFilePreview()}</div>
+                  <p className="font-medium mb-2">{fileToUpload.name}</p>
 
-        {/* Status indicators */}
+                  {/* Progress Bar */}
         {uploadStatus === "uploading" && (
-          <div className="w-full mt-4">
-            <div className="text-center text-gray-700 mb-2">
-              {convertingDocx ? 'Converting DOCX to PDF...' : 'Uploading file...'}
+                    <div className="w-full max-w-xs mb-4">
+                      <progress 
+                        className="progress progress-primary w-full" 
+                        value={uploadProgress} 
+                        max="100"
+                      ></progress>
+                      <p className="text-sm text-center mt-2">{uploadProgress}% uploaded</p>
             </div>
-            <div className="w-full bg-gray-200 rounded-full h-2.5">
-              <div
-                className="bg-blue-600 h-2.5 rounded-full"
-                style={{ width: `${uploadProgress}%` }}
-              ></div>
+                  )}
+                  
+                  {/* Converting Message */}
+                  {convertingDocx && (
+                    <div className="flex items-center gap-2 text-primary">
+                      <Loader className="animate-spin" size={16} />
+                      <span>Converting document...</span>
             </div>
-            <div className="text-center text-sm text-gray-500 mt-1">
-              {uploadProgress}%
-            </div>
+                  )}
           </div>
         )}
-
-        {fileToUpload && filePreviewUrl && (
-          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-            <div className="flex items-center space-x-4">
-              {/* Show the icon based on the original file type, not the converted file */}
-              {fileToUpload && fileToUpload.name.toLowerCase().endsWith('.docx') ?
-                <FileText className="text-blue-500 text-3xl" /> :
-                getFilePreview()
-              }
-              <div className="flex-1">
-                <p className="font-medium text-gray-800 truncate">{fileToUpload.name}</p>
-                <p className="text-sm text-gray-500">
-                  {!isImageFile(fileToUpload.type) && `Pages: ${totalPages} • `}{(fileToUpload.size / (1024 * 1024)).toFixed(2)} MB
-                  {convertingDocx && <span className="ml-1 text-blue-500">(Converted for printing)</span>}
-                </p>
-                <p className="text-xs text-green-600 mt-1">
-                  Upload complete! Redirecting to printer page...
-                </p>
               </div>
             </div>
           </div>
-        )}
       </div>
     </div>
   );

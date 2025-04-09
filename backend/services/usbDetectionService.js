@@ -11,7 +11,16 @@ let wsClients = new Set();
 let driveDetectionState = new Map(); // Used for debouncing
 
 // Supported file extensions for printing
-const SUPPORTED_EXTENSIONS = ['.pdf', '.doc', '.docx', '.jpg', '.jpeg', '.png', '.xls', '.xlsx'];
+const SUPPORTED_EXTENSIONS = [
+  '.pdf', 
+  '.doc', 
+  '.docx', 
+  '.jpg', 
+  '.jpeg', 
+  '.png', 
+  '.xls', 
+  '.xlsx'
+];
 
 // Constants
 const POLL_INTERVAL = 5000; // Increase to 5 seconds
@@ -19,47 +28,62 @@ const DISCONNECT_THRESHOLD = 3; // Number of consecutive misses before consideri
 
 // Function to scan a directory for files
 async function scanDirectory(dirPath) {
+  console.log('🔍 Scanning directory:', dirPath);
   const files = [];
   
   try {
-    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    // Use synchronous operations for better Windows compatibility
+    const entries = fs.readdirSync(dirPath);
+    console.log(`📂 Found ${entries.length} entries in directory`);
     
     for (const entry of entries) {
-      const fullPath = path.join(dirPath, entry.name);
-      
-      if (entry.isDirectory()) {
-        try {
-          // Recursively scan subdirectories (with depth control to avoid infinite recursion)
-          const subFiles = await scanDirectory(fullPath);
-          files.push(...subFiles);
-        } catch (err) {
-          console.error(`Error scanning subdirectory ${fullPath}:`, err);
-          // Continue with other directories/files
-        }
-      } else if (entry.isFile()) {
-        const ext = path.extname(entry.name).toLowerCase();
+      try {
+        const fullPath = path.join(dirPath, entry);
+        console.log('📄 Processing entry:', entry);
         
-        if (SUPPORTED_EXTENSIONS.includes(ext)) {
+        const stats = fs.statSync(fullPath);
+        
+        if (stats.isDirectory()) {
+          console.log('📁 Found subdirectory:', entry);
           try {
-            const stats = await fs.promises.stat(fullPath);
-            files.push({
-              name: entry.name,
+            // Recursively scan subdirectories
+            const subFiles = await scanDirectory(fullPath);
+            files.push(...subFiles);
+          } catch (err) {
+            console.error(`❌ Error scanning subdirectory ${fullPath}:`, err);
+          }
+        } else if (stats.isFile()) {
+          const ext = path.extname(entry).toLowerCase();
+          console.log('🔎 File extension:', ext);
+          
+          if (SUPPORTED_EXTENSIONS.includes(ext)) {
+            console.log('✅ Found supported file:', entry);
+            const fileInfo = {
+              name: entry,
               path: fullPath,
               size: stats.size,
               modified: stats.mtime,
               type: ext.substring(1) // Remove the dot from extension
-            });
-          } catch (err) {
-            console.error(`Error getting stats for ${fullPath}:`, err);
+            };
+            console.log('📝 File info:', fileInfo);
+            files.push(fileInfo);
+            console.log('✨ Added file to list:', entry);
+          } else {
+            console.log('❌ Skipping unsupported file:', entry);
           }
         }
+      } catch (entryError) {
+        console.error(`❌ Error processing entry ${entry}:`, entryError);
       }
     }
+    
+    console.log(`📊 Scan complete. Found ${files.length} supported files:`, files);
+    return files;
+    
   } catch (error) {
-    console.error(`Error scanning directory ${dirPath}:`, error);
+    console.error(`❌ Error scanning directory ${dirPath}:`, error);
+    return [];
   }
-  
-  return files;
 }
 
 // Broadcast a message to all connected WebSocket clients

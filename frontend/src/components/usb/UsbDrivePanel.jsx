@@ -12,6 +12,20 @@ const UsbDrivePanel = ({ onFileSelect }) => {
   const realConnectionStatus = useRef('disconnected');
   const statusTimeoutRef = useRef(null);
 
+  // Add debugging logs
+  useEffect(() => {
+    console.log('UsbDrivePanel mounted');
+    console.log('Initial state:', { usbDrives, selectedDrive, connectionStatus });
+  }, []);
+
+  useEffect(() => {
+    console.log('USB Drives updated:', usbDrives);
+  }, [usbDrives]);
+
+  useEffect(() => {
+    console.log('Selected drive updated:', selectedDrive);
+  }, [selectedDrive]);
+
   const setDelayedConnectionStatus = (status) => {
     realConnectionStatus.current = status;
     
@@ -123,6 +137,7 @@ const UsbDrivePanel = ({ onFileSelect }) => {
           ws.onmessage = (event) => {
             try {
               const message = JSON.parse(event.data);
+              console.log('Received WebSocket message:', message);
               handleWebSocketMessage(message);
             } catch (err) {
               console.error('Error parsing WebSocket message:', err, event.data);
@@ -204,17 +219,20 @@ const UsbDrivePanel = ({ onFileSelect }) => {
   
   // Handle WebSocket messages
   const handleWebSocketMessage = (message) => {
+    console.log('Handling WebSocket message:', message);
+    
     switch (message.type) {
       case 'usb_connected':
+        console.log('USB connected message received:', message.data);
         setUsbDrives(prev => {
           const newDrives = [...prev];
           const existingIndex = newDrives.findIndex(d => d.path === message.data.path);
           
           if (existingIndex !== -1) {
-            // Update existing drive
+            console.log('Updating existing drive:', message.data);
             newDrives[existingIndex] = message.data;
           } else {
-            // Add new drive
+            console.log('Adding new drive:', message.data);
             newDrives.push(message.data);
           }
           
@@ -223,35 +241,40 @@ const UsbDrivePanel = ({ onFileSelect }) => {
         
         // If this is the first drive and no drive is selected, select it
         if (usbDrives.length === 0 && !selectedDrive) {
+          console.log('Auto-selecting first drive:', message.data.path);
           setSelectedDrive(message.data.path);
         }
-        
-        // Since we have drives, ensure connection status appears connected
-        setConnectionStatus('connected');
         break;
         
       case 'usb_disconnected':
+        console.log('USB disconnected message received:', message.data);
         setUsbDrives(prev => {
           const newDrives = prev.filter(drive => drive.path !== message.data.path);
+          console.log('Drives after removal:', newDrives);
           return newDrives;
         });
         
-        // If the selected drive was disconnected, clear selection
         if (selectedDrive === message.data.path) {
+          console.log('Selected drive was disconnected, clearing selection');
           setSelectedDrive(null);
         }
         break;
         
       case 'files_updated':
+        console.log('Files updated message received:', message.data);
         setUsbDrives(prev => {
           const newDrives = [...prev];
           const driveIndex = newDrives.findIndex(d => d.path === message.data.path);
           
           if (driveIndex !== -1) {
+            console.log('Updating files for drive:', message.data.path);
             newDrives[driveIndex] = {
               ...newDrives[driveIndex],
               files: message.data.files
             };
+            console.log('Updated drive:', newDrives[driveIndex]);
+          } else {
+            console.log('Drive not found for files update:', message.data.path);
           }
           
           return newDrives;
@@ -259,30 +282,39 @@ const UsbDrivePanel = ({ onFileSelect }) => {
         break;
         
       case 'pong':
-        // Server responded to our ping
-        console.log('Received pong from server, connection is alive');
-        // Update connection status to connected
-        setDelayedConnectionStatus('connected');
+        console.log('Received pong from server');
+        setConnectionStatus('connected');
         break;
         
       default:
-        console.log('Unknown WebSocket message type:', message.type);
+        console.log('Unknown message type:', message.type);
     }
   };
   
   // Fetch USB drives through REST API as a fallback
   const fetchUsbDrives = async () => {
+    console.log('Fetching USB drives via REST API...');
     setIsLoading(true);
     setError(null);
     
     try {
       const response = await axios.get('http://localhost:5000/api/usb-drives');
+      console.log('USB drives API response:', response.data);
+      
       if (response.data.status === 'success') {
         setUsbDrives(response.data.drives);
         
         // If we successfully got drives via REST API, show connected status
         if (response.data.drives.length > 0) {
-          setDelayedConnectionStatus('connected');
+          console.log('Found USB drives:', response.data.drives);
+          setConnectionStatus('connected');
+          
+          // If no drive is selected and we have drives, select the first one
+          if (!selectedDrive && response.data.drives.length > 0) {
+            setSelectedDrive(response.data.drives[0].path);
+          }
+        } else {
+          console.log('No USB drives found');
         }
       }
     } catch (error) {
@@ -295,12 +327,13 @@ const UsbDrivePanel = ({ onFileSelect }) => {
   
   // Refresh files for a specific drive
   const refreshDrive = async (drivePath) => {
+    console.log('Refreshing drive:', drivePath);
     if (!drivePath) return;
     
     setIsLoading(true);
     try {
-      await axios.get(`http://localhost:5000/api/usb-drives/${encodeURIComponent(drivePath)}/refresh`);
-      // No need to update state - WebSocket will handle it
+      const response = await axios.get(`http://localhost:5000/api/usb-drives/${encodeURIComponent(drivePath)}/refresh`);
+      console.log('Drive refresh response:', response.data);
     } catch (error) {
       console.error('Error refreshing drive:', error);
       setError('Failed to refresh drive');
@@ -318,7 +351,9 @@ const UsbDrivePanel = ({ onFileSelect }) => {
   
   // Get the selected drive object
   const getSelectedDriveObject = () => {
-    return usbDrives.find(drive => drive.path === selectedDrive);
+    const drive = usbDrives.find(drive => drive.path === selectedDrive);
+    console.log('Selected drive object:', drive);
+    return drive;
   };
   
   // Format file size
