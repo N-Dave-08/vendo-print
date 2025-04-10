@@ -76,5 +76,18 @@ try {
     exit 1
 }
 
-# Wait for the process to complete
-Start-Sleep -Seconds 2 
+# Verify the output file exists and has content
+$outputFile = Join-Path $outputDir ([System.IO.Path]::GetFileNameWithoutExtension($relativeInput) + ".pdf")
+if (-not (Test-Path $outputFile)) {
+    Write-Error "Output file not found at: $outputFile"
+    exit 1
+}
+
+$fileSize = (Get-Item $outputFile).Length
+if ($fileSize -eq 0) {
+    Write-Error "Output file is empty: $outputFile"
+    exit 1
+}
+
+Write-Host "Conversion successful. Output file: $outputFile ($fileSize bytes)"
+exit 0 

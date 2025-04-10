@@ -560,45 +560,20 @@ const Usb = () => {
       const formData = new FormData();
       formData.append('file', file);
 
-      // Get the backend URL with proper port and error handling
-      // Try multiple possible backend URLs
-      const possibleBackendUrls = [
-        'http://localhost:5000/api/convert-docx',
-        'http://127.0.0.1:5000/api/convert-docx',
-        `http://${window.location.hostname}:5000/api/convert-docx`
-      ];
+      // Use a single backend URL with increased timeout
+      const backendUrl = 'http://localhost:5000/api/convert-docx';
+      console.log(`Attempting to connect to backend at: ${backendUrl}`);
 
-      let response = null;
-      let lastError = null;
+      // Call the backend conversion API with increased timeout
+      const response = await axios.post(backendUrl, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        },
+        responseType: 'blob', // Important: we want the response as a blob
+        timeout: 300000 // 5 minute timeout for conversion
+      });
 
-      // Try each URL until one works
-      for (const backendUrl of possibleBackendUrls) {
-        try {
-          console.log(`Attempting to connect to backend at: ${backendUrl}`);
-
-          // Call the backend conversion API with a timeout
-          response = await axios.post(backendUrl, formData, {
-            headers: {
-              'Content-Type': 'multipart/form-data'
-            },
-            responseType: 'blob', // Important: we want the response as a blob
-            timeout: 60000 // 60 second timeout for conversion
-          });
-
-          // If we got here, the request succeeded
-          console.log(`Successfully connected to backend at: ${backendUrl}`);
-          break;
-        } catch (err) {
-          console.log(`Failed to connect to ${backendUrl}: ${err.message}`);
-          lastError = err;
-          setPrintStatus(`Trying alternative connection method... (${backendUrl})`);
-        }
-      }
-
-      // If all attempts failed, throw the last error
-      if (!response) {
-        throw lastError || new Error('Failed to connect to any backend URL');
-      }
+      console.log(`Successfully connected to backend at: ${backendUrl}`);
 
       // Check if the response is an error in JSON format
       const contentType = response.headers['content-type'];
