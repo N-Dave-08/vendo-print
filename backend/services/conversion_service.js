@@ -265,7 +265,7 @@ export async function convertDocxToPdf(inputFilePath, progressCallback = () => {
             windowsHide: true,
             maxBuffer: 1024 * 1024 * 10, // 10MB buffer
             shell: true,
-            timeout: 120000 // 2 minutes timeout
+            timeout: 300000 // 5 minutes timeout
         });
 
         console.log('PowerShell stdout:', stdout);
@@ -281,17 +281,34 @@ export async function convertDocxToPdf(inputFilePath, progressCallback = () => {
 
         console.log('Expected output file:', expectedOutputFile);
 
-        // Wait a bit for the file system to sync
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Wait up to 10 seconds for the file to appear
+        let attempts = 0;
+        while (!fs.existsSync(expectedOutputFile) && attempts < 10) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            attempts++;
+            console.log(`Waiting for output file, attempt ${attempts}/10...`);
+        }
 
         // Check if the file exists
         if (!fs.existsSync(expectedOutputFile)) {
-            throw new Error(`PDF conversion failed - output file not found at ${expectedOutputFile}`);
+            throw new Error(`PDF conversion failed - output file not found at ${expectedOutputFile} after ${attempts} seconds`);
         }
 
-        // Check if the file has content
-        const stats = fs.statSync(expectedOutputFile);
-        if (stats.size === 0) {
+        // Check if the file has content and wait for it to be fully written
+        let fileSize = 0;
+        let prevFileSize = -1;
+        attempts = 0;
+
+        while (fileSize !== prevFileSize && attempts < 10) {
+            prevFileSize = fileSize;
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            const stats = fs.statSync(expectedOutputFile);
+            fileSize = stats.size;
+            attempts++;
+            console.log(`Checking file size, attempt ${attempts}/10: ${fileSize} bytes`);
+        }
+
+        if (fileSize === 0) {
             throw new Error('PDF conversion failed - output file is empty');
         }
 
