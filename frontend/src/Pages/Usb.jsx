@@ -1467,7 +1467,7 @@ const Usb = () => {
       {/* USB Guide Modal */}
       {showModal && (
         <div className="modal modal-open">
-          <div className="modal-box relative max-w-3xl bg-base-100">
+          <div className="modal-box relative max-w-3xl">
             <h3 className="text-2xl font-bold text-primary mb-8">How to Print from USB</h3>
             <div className="space-y-6">
               <div className="flex items-start gap-4">

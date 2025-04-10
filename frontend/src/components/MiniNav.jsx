@@ -14,17 +14,21 @@ function MiniNav({ title, onBack, showBackButton = true }) {
   };
 
   return (
-    <div className="flex items-center gap-2 p-4 border-b">
-      {showBackButton && (
-        <button
-          onClick={handleBack}
-          className="p-2 rounded-full hover:bg-gray-100"
-          aria-label="Go back"
-        >
-          <ArrowLeft size={20} />
-        </button>
-      )}
-      <h2 className="text-xl font-semibold">{title}</h2>
+    <div className="navbar bg-base-100 border-b">
+      <div className="flex-none">
+        {showBackButton && (
+          <button
+            onClick={handleBack}
+            className="btn btn-ghost btn-circle"
+            aria-label="Go back"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+        )}
+      </div>
+      <div className="flex-1">
+        <h2 className="text-xl font-semibold">{title}</h2>
+      </div>
     </div>
   );
 }
