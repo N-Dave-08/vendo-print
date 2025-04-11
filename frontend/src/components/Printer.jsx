@@ -934,28 +934,6 @@ const Printer = () => {
             )}
           </div>
         </div>
-
-        {/* Introduction Card */}
-        <div className="card bg-base-100 shadow-xl mt-8">
-          <div className="card-body">
-            <h2 className="card-title text-2xl text-primary">Welcome to Print Station</h2>
-            <div className="divider" />
-            
-            <div className="alert alert-info justify-center py-8">
-              <Info className="w-6 h-6" />
-              <span className="text-lg">Select a print method above to get started</span>
-            </div>
-            
-            <div className="mt-6">
-              <h3 className="font-medium text-lg mb-4">Available Print Options:</h3>
-              <ul className="list-disc pl-5 space-y-2">
-                <li><strong>Xerox:</strong> Print directly from physical documents</li>
-                <li><strong>USB:</strong> Print from a USB flash drive</li>
-                <li><strong>QR Code:</strong> Upload and print files from your mobile device</li>
-              </ul>
-            </div>
-          </div>
-        </div>
       </main>
 
       {/* Modal for QR */}

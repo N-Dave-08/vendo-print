@@ -18,6 +18,7 @@ import axios from "axios";
 import { loadPDF } from '../utils/pdfjs-init';
 import SmartPriceLabel from "../components/qr/smart_price";
 import { deleteFile } from '../utils/fileOperations';
+import { AlertCircle, RefreshCw } from "lucide-react";
 
 // Function to get the appropriate icon based on file type
 const getFileIcon = (fileName, size = "normal") => {
@@ -85,6 +86,8 @@ const QRUpload = () => {
   const [isColor, setIsColor] = useState(false);
   const [isSmartPriceEnabled, setIsSmartPriceEnabled] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [printerStatus, setPrinterStatus] = useState({});
 
   // Balance and price
   const [balance, setBalance] = useState(0);
@@ -110,43 +113,163 @@ const QRUpload = () => {
     return () => unsubscribe();
   }, []);
 
-  // Fetch printers when print dialog opens
-  useEffect(() => {
-    if (isPrintDialogOpen) {
-      setError("");
-      
-      axios
-        .get("http://localhost:5000/api/printers", { timeout: 5000 })
-        .then((response) => {
-          const availablePrinters = response.data.printers || [];
-          setPrinters(availablePrinters);
-          
-          // Automatically select the first available physical printer
-          if (availablePrinters.length > 0 && !selectedPrinter) {
-            // Filter out virtual printers
-            const virtualPrinters = ['Microsoft XPS Document Writer', 'Microsoft Print to PDF', 'Fax', 'OneNote'];
-            const physicalPrinters = availablePrinters.filter(
-              printer => !virtualPrinters.some(vp => printer.name.includes(vp))
-            );
-
-            // Select the first physical printer, or if none available, the first printer in the list
-            const defaultPrinter = physicalPrinters.length > 0 ? physicalPrinters[0] : availablePrinters[0];
-            setSelectedPrinter(defaultPrinter.name);
-          }
-        })
-        .catch((error) => {
-          console.error("Failed to fetch printers:", error);
-          
-          if (error.code === 'ECONNABORTED' || !error.response) {
-            setError("Connection to the print server timed out. Please check if the server is running.");
-          } else if (error.message.includes('Network Error')) {
-            setError("Network error. Please check your connection to the print server.");
-          } else {
-            setError("Failed to fetch printers. The print server may be offline.");
-          }
-        });
+  // Function to get printer status with retry
+  const getPrinterStatus = async (printerName) => {
+    // If we're already checking status, don't start another check
+    if (printerStatus[printerName]?.loading) {
+      return printerStatus[printerName]?.status || "Unknown";
     }
-  }, [isPrintDialogOpen]);
+
+    // Set initial status
+    setPrinterStatus(prev => ({
+      ...prev,
+      [printerName]: { ...prev[printerName], loading: true }
+    }));
+
+    try {
+      const response = await axios.get(
+        `http://localhost:5000/api/printers/${encodeURIComponent(printerName)}/capabilities`,
+        { timeout: 5000 } // Reduced timeout for faster response
+      );
+      
+      if (response.data.status === 'success' && response.data.capabilities?.capabilities?.status) {
+        const status = response.data.capabilities.capabilities.status;
+        setPrinterStatus(prev => ({
+          ...prev,
+          [printerName]: { status, loading: false }
+        }));
+        return status;
+      }
+      
+      // If capabilities don't include status, assume printer is ready
+      setPrinterStatus(prev => ({
+        ...prev,
+        [printerName]: { status: "Ready", loading: false }
+      }));
+      return "Ready";
+    } catch (error) {
+      console.error('Error getting printer status:', error);
+      // On error, assume printer is ready rather than triggering retries
+      setPrinterStatus(prev => ({
+        ...prev,
+        [printerName]: { status: "Ready", loading: false }
+      }));
+      return "Ready";
+    }
+  };
+
+  // Modify useEffect to reduce status check frequency
+  useEffect(() => {
+    let isComponentMounted = true;
+
+    const initializePrinterConnection = async () => {
+      if (!isComponentMounted) return;
+      
+      try {
+        await fetchPrinters();
+      } catch (error) {
+        console.error("Failed to initialize printer connection:", error);
+      }
+    };
+
+    initializePrinterConnection();
+
+    // Set up less frequent status checks
+    const statusCheckInterval = setInterval(async () => {
+      if (!isComponentMounted || !selectedPrinter) return;
+      
+      // Only check status if printer isn't already being checked
+      if (!printerStatus[selectedPrinter]?.loading) {
+        try {
+          await getPrinterStatus(selectedPrinter);
+        } catch (error) {
+          console.error('Error checking printer status:', error);
+        }
+      }
+    }, 30000); // Reduced frequency to 30 seconds
+
+    return () => {
+      isComponentMounted = false;
+      clearInterval(statusCheckInterval);
+    };
+  }, []);
+
+  // Function to check if a printer name is likely a virtual printer
+  const isVirtualPrinter = (printerName) => {
+    const virtualPrinterPatterns = [
+      'microsoft', 'pdf', 'xps', 'document writer', 'onedrive', 
+      'fax', 'print to', 'onenote', 'adobe pdf', 'bullzip'
+    ];
+    
+    const lowerName = printerName.toLowerCase();
+    return virtualPrinterPatterns.some(pattern => lowerName.includes(pattern));
+  };
+
+  // Function to fetch printers with retry
+  const fetchPrinters = async (isRetry = false) => {
+    if (isRetry) {
+      setIsRetrying(true);
+    }
+    
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+      const response = await axios.get("http://localhost:5000/api/printers", { 
+        timeout: 15000
+      });
+      
+      const printerList = response.data.printers || [];
+      console.log("Received printer list:", printerList);
+      setPrinters(printerList);
+
+      // Filter out virtual printers to get physical printers
+      const physicalPrinters = printerList.filter(printer => !isVirtualPrinter(printer.name));
+      console.log("Physical printers found:", physicalPrinters);
+
+      // Initialize status for all printers
+      const statusObj = {};
+      printerList.forEach(printer => {
+        statusObj[printer.name] = { 
+          status: "Ready", // Assume Ready by default
+          loading: false 
+        };
+      });
+      setPrinterStatus(statusObj);
+      
+      if (physicalPrinters.length > 0) {
+        // Select the first physical printer found
+        const selectedPhysicalPrinter = physicalPrinters[0];
+        console.log("Selected physical printer:", selectedPhysicalPrinter.name);
+        setSelectedPrinter(selectedPhysicalPrinter.name);
+        setError(null);
+      } else {
+        setError("No physical printer found. Please connect a printer and try again.");
+      }
+    } catch (error) {
+      console.error("Failed to fetch printers:", error);
+      if (error.code === 'ECONNABORTED' || !error.response) {
+        setError(
+          "Connection to the print server timed out. Please check if:\n" +
+          "1. The server is running (npm start in backend folder)\n" +
+          "2. The server port 5000 is not blocked\n" +
+          "3. No other application is using port 5000"
+        );
+      } else if (error.message.includes('Network Error')) {
+        setError(
+          "Network error. Please check:\n" +
+          "1. Your network connection\n" +
+          "2. The print server is running on localhost:5000\n" +
+          "3. No firewall is blocking the connection"
+        );
+      } else {
+        setError(`Failed to fetch printers: ${error.message}`);
+      }
+    } finally {
+      setIsLoading(false);
+      setIsRetrying(false);
+    }
+  };
 
   // Calculate price based on settings
   useEffect(() => {
@@ -520,17 +643,19 @@ const QRUpload = () => {
   const getCurrentPrinter = () => {
     if (!selectedPrinter) {
       return {
-        name: "No printer selected",
-        status: "Select a printer to continue",
+        name: "Connecting to printer...",
+        status: "Checking connection...",
         isReady: false
       };
     }
 
-    const printer = printers.find(p => p.name === selectedPrinter);
+    const status = printerStatus[selectedPrinter]?.status || "Unknown";
+    const isReady = status.toLowerCase() === "ready";
+
     return {
-      name: printer?.name || selectedPrinter,
-      status: printer?.status || "Ready to print",
-      isReady: true
+      name: selectedPrinter,
+      status: printerStatus[selectedPrinter]?.loading ? "Checking status..." : status,
+      isReady: isReady
     };
   };
 
@@ -824,20 +949,33 @@ const QRUpload = () => {
                       <div>
                         <h5 className="text-sm font-medium text-gray-600 mb-3">Connected Printer</h5>
                         <div className="flex flex-col gap-3">
-                          <div className="relative">
-                            <select 
-                              className="select select-bordered w-full"
-                              value={selectedPrinter || ''}
-                              onChange={(e) => setSelectedPrinter(e.target.value)}
-                            >
-                              <option value="" disabled>Select a printer</option>
-                              {printers.map((printer) => (
-                                <option key={printer.name} value={printer.name}>
-                                  {printer.name}
-                                </option>
-                              ))}
-                            </select>
+                          {error && (
+                            <div className="alert alert-error mb-4">
+                              <AlertCircle className="w-6 h-6" />
+                              <div>
+                                <span>{error}</span>
+                                <div>
+                                  <button 
+                                    className="btn btn-sm btn-outline mt-2 gap-2" 
+                                    onClick={() => fetchPrinters(true)}
+                                    disabled={isRetrying}
+                                  >
+                                    {isRetrying ? (
+                                      <>
+                                        <span className="loading loading-spinner loading-xs"></span>
+                                        Retrying...
+                                      </>
+                                    ) : (
+                                      <>
+                                        <RefreshCw className="w-4 h-4" />
+                                        Retry Connection
+                                      </>
+                                    )}
+                                  </button>
                 </div>
+                              </div>
+                            </div>
+                          )}
 
                           <div className="flex items-center gap-3 p-4 bg-base-100 rounded-xl border border-base-200">
                             <BsPrinterFill className={`w-5 h-5 ${getCurrentPrinter().isReady ? 'text-primary' : 'text-gray-400'}`} />

@@ -7,10 +7,6 @@ const Sidebar = () => {
 
   return (
     <div className="h-screen w-20 bg-base-300 flex flex-col items-center py-6 shadow-lg">
-      {/* Logo */}
-      <div className="w-12 h-12 rounded-lg mb-10 flex items-center justify-center bg-primary/10">
-        <span className="text-primary text-xl font-bold">V</span>
-      </div>
 
       {/* Menu Items */}
       <div className="flex flex-col gap-4">
@@ -32,7 +28,7 @@ const Sidebar = () => {
       </div>
 
       {/* Admin Icon at Bottom */}
-      <div className="mt-auto mb-6">
+      {/* <div className="mt-auto mb-6">
         <Link to="/settings" className="w-full flex justify-center">
           <div
             className={`w-14 h-14 flex items-center justify-center cursor-pointer transition-all duration-200 hover:bg-base-100
@@ -46,7 +42,7 @@ const Sidebar = () => {
             <User className="w-6 h-6" />
           </div>
         </Link>
-      </div>
+      </div> */}
     </div>
   );
 };
