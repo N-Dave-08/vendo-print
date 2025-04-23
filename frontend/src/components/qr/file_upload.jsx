@@ -10,6 +10,7 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableCell, TableRow, WidthType, BorderStyle } from "docx";
 import axios from 'axios';
+import { truncatePdfToTenPages } from '../../utils/pdfUtils';
 
 const FileUpload = () => {
   const [fileToUpload, setFileToUpload] = useState(null);
@@ -900,15 +901,26 @@ const FileUpload = () => {
     try {
       // Get actual page count for PDFs
       let pageCount = 1;
+      let fileToUpload = file;
+      
       if (file.type === "application/pdf") {
         try {
           const pdfData = await file.arrayBuffer();
+          
+          // Truncate PDF if needed
+          const { pdfBytes, pageCount: truncatedPageCount } = await truncatePdfToTenPages(pdfData);
           const pdfDoc = await PDFDocument.load(pdfData);
-          pageCount = pdfDoc.getPageCount();
-          console.log(`PDF has ${pageCount} pages`);
+          
+          // Create a new File object with the truncated PDF if it was modified
+          if (truncatedPageCount !== pdfDoc.getPageCount()) {
+            fileToUpload = new File([pdfBytes], file.name, { type: 'application/pdf' });
+          }
+          
+          pageCount = truncatedPageCount;
+          console.log(`PDF has ${pageCount} pages after truncation`);
           setTotalPages(pageCount);
         } catch (error) {
-          console.error("Error getting PDF page count:", error);
+          console.error("Error processing PDF:", error);
           // Fallback to estimating pages based on file size
           const fileSizeInKB = file.size / 1024;
           pageCount = Math.max(1, Math.ceil(fileSizeInKB / 100));
@@ -916,128 +928,45 @@ const FileUpload = () => {
       }
 
       // Create a unique filename
-    const timestamp = Date.now();
-      const uniqueFileName = `${timestamp}_${file.name}`;
+      const timestamp = Date.now();
+      const uniqueFileName = `${timestamp}_${fileToUpload.name}`;
       const fileRef = ref(storage, `uploads/${uniqueFileName}`);
 
       // Set metadata including page count
       const metadata = {
-        contentType: file.type,
+        contentType: fileToUpload.type,
         customMetadata: {
           public: "true",
           pageCount: pageCount.toString(),
-          fileName: file.name
+          fileName: fileToUpload.name,
+          wasTruncated: (pageCount === 10).toString()
         }
       };
 
       // Upload file
-      const uploadTask = uploadBytesResumable(fileRef, file, metadata);
+      const uploadTask = uploadBytesResumable(fileRef, fileToUpload, metadata);
 
-    uploadTask.on(
-      "state_changed",
-      (snapshot) => {
+      uploadTask.on(
+        "state_changed",
+        (snapshot) => {
           const progress = Math.round(
             (snapshot.bytesTransferred / snapshot.totalBytes) * 100
           );
-        setUploadProgress(progress);
-      },
-      (error) => {
-        console.error("Upload error:", error);
-        setUploadStatus("");
-        alert(`Upload failed: ${error.message}`);
-      },
-      async () => {
+          setUploadProgress(progress);
+          setUploadStatus("uploading");
+        },
+        (error) => {
+          console.error("Upload error:", error);
+          setUploadStatus("");
+          alert(`Error: ${error.message}`);
+        },
+        async () => {
           try {
-        const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-            
-            // For PDFs, perform color analysis
-            let colorAnalysisResults = null;
-            if (file.type === "application/pdf") {
-              try {
-                const iframe = document.createElement('iframe');
-                iframe.style.display = 'none';
-                document.body.appendChild(iframe);
-                
-                // Set up message listener for color analysis
-                const colorAnalysisPromise = new Promise((resolve, reject) => {
-                  const timeoutId = setTimeout(() => {
-                    reject(new Error('Color analysis timed out'));
-                  }, 30000); // Increased timeout to 30 seconds for large files
-
-                  window.addEventListener('message', function onMessage(event) {
-                    if (event.data.type === 'colorAnalysisComplete') {
-                      clearTimeout(timeoutId);
-                      window.removeEventListener('message', onMessage);
-                      resolve(event.data.results);
-                    }
-                  });
-                });
-
-                // Load proxy page and analyze PDF
-                iframe.src = '/proxy-pdf.html';
-                await new Promise(resolve => iframe.onload = resolve);
-
-                iframe.contentWindow.postMessage({
-                  type: 'analyzePDF',
-                  pdfUrl: downloadURL,
-                  filename: file.name
-                }, '*');
-
-                colorAnalysisResults = await colorAnalysisPromise;
-                document.body.removeChild(iframe);
-
-                console.log('Color analysis results:', colorAnalysisResults);
-              } catch (analysisError) {
-                console.error('Color analysis failed:', analysisError);
-              }
-            }
-
-            // Create database entry with comprehensive file information
-            const newFileRef = push(dbRef(realtimeDb, "uploadedFiles"));
-            const fileData = {
-              fileName: file.name,
-              fileUrl: downloadURL,
-              fileType: file.type,
-              uploadedAt: new Date().toISOString(),
-              totalPages: pageCount,
-              uploadSource: "qr",
-              status: "ready",
-              isConverted: false
-            };
-
-            // Add color analysis data if available
-            if (colorAnalysisResults && !colorAnalysisResults.error) {
-              fileData.colorAnalysis = {
-                hasColoredPages: colorAnalysisResults.hasColoredPages,
-                coloredPageCount: colorAnalysisResults.coloredPageCount,
-                blackAndWhitePageCount: pageCount - colorAnalysisResults.coloredPageCount,
-                pageDetails: colorAnalysisResults.pageAnalysis?.map(page => ({
-                  pageNumber: page.pageNumber,
-                  hasColor: page.hasColor,
-                  colorPercentage: parseFloat(page.colorPercentage)
-                }))
-              };
-            }
-
-            await set(newFileRef, fileData);
-
-            // Show success message
-            setSuccessMessage(`${file.name} uploaded successfully!`);
-            setShowSuccess(true);
-            
-            // Clear success message and form after 3 seconds
-            setTimeout(() => {
-              setShowSuccess(false);
-              setSuccessMessage("");
-              // Clear the file input
-              setFileToUpload(null);
-              setFilePreviewUrl("");
-              setUploadProgress(0);
-            }, 3000);
-
+            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+            await handleUploadSuccess(downloadURL, fileToUpload.name, fileToUpload.type);
           } catch (error) {
-            console.error("Error completing upload:", error);
-            alert("Error completing upload. Please try again.");
+            console.error("Error finalizing upload:", error);
+            alert("Error finalizing upload. Please try again.");
           }
         }
       );
@@ -1062,28 +991,28 @@ const FileUpload = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <span>{successMessage}</span>
-        </div>
-      )}
+              </div>
+            )}
 
             {/* File Upload Area */}
             <div
               className={`border-2 border-dashed rounded-lg p-8 text-center ${
                 dragActive ? "border-primary bg-primary/5" : "border-base-300 hover:border-primary"
               }`}
-          onDragOver={handleDrag}
+              onDragOver={handleDrag}
               onDragLeave={handleDrag}
-          onDrop={handleDrop}
-        >
+              onDrop={handleDrop}
+            >
               {!fileToUpload ? (
                 <div className="flex flex-col items-center">
                   <Upload size={40} className="text-base-content/50 mb-4" />
                   <p className="mb-2 text-base-content/70">Drag and drop a file here, or click to browse</p>
                   <p className="text-sm text-base-content/50 mb-4">Supported formats: PDF, Word, Images</p>
-          <input
-            type="file"
+                  <input
+                    type="file"
                     id="file-upload"
-            className="hidden"
-            onChange={handleFileChange}
+                    className="hidden"
+                    onChange={handleFileChange}
                     accept={allowedTypes.join(",")}
                   />
                   <button
@@ -1092,7 +1021,7 @@ const FileUpload = () => {
                   >
                     Browse Files
                   </button>
-        </div>
+                </div>
               ) : (
                 <div className="flex flex-col items-center">
                   {/* File Preview */}
@@ -1100,7 +1029,7 @@ const FileUpload = () => {
                   <p className="font-medium mb-2">{fileToUpload.name}</p>
 
                   {/* Progress Bar */}
-        {uploadStatus === "uploading" && (
+                  {uploadStatus === "uploading" && (
                     <div className="w-full max-w-xs mb-4">
                       <progress 
                         className="progress progress-primary w-full" 
@@ -1108,7 +1037,7 @@ const FileUpload = () => {
                         max="100"
                       ></progress>
                       <p className="text-sm text-center mt-2">{uploadProgress}% uploaded</p>
-            </div>
+                    </div>
                   )}
                   
                   {/* Converting Message */}
@@ -1116,13 +1045,13 @@ const FileUpload = () => {
                     <div className="flex items-center gap-2 text-primary">
                       <Loader className="animate-spin" size={16} />
                       <span>Converting document...</span>
-            </div>
+                    </div>
                   )}
-          </div>
-        )}
-              </div>
+                </div>
+              )}
             </div>
           </div>
+        </div>
       </div>
     </div>
   );

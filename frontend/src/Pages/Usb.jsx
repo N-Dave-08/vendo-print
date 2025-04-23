@@ -24,6 +24,7 @@ import mammoth from "mammoth";
 import { getPageIndicesToPrint } from "../utils/pageRanges";
 import Header from "../components/headers/Header";
 import ClientContainer from "../components/containers/ClientContainer";
+import { truncatePdfToTenPages } from '../utils/pdfUtils';
 
 const Usb = () => {
   const navigate = useNavigate();
@@ -936,10 +937,13 @@ const Usb = () => {
           // Create a new file from the response
           fileToUpload = new File([pdfResponse.data], selectedFile.name.replace(/\.(docx|doc)$/i, '.pdf'), { type: 'application/pdf' });
           
-          // Get PDF page count
+          // Get PDF page count and truncate if needed
           const pdfData = await pdfResponse.data.arrayBuffer();
-          const pdfDoc = await PDFDocument.load(pdfData);
-          pageCount = pdfDoc.getPageCount();
+          const { pdfBytes, pageCount: truncatedPageCount } = await truncatePdfToTenPages(pdfData);
+          
+          // Create a new File object with the truncated PDF
+          fileToUpload = new File([pdfBytes], fileToUpload.name, { type: 'application/pdf' });
+          pageCount = truncatedPageCount;
 
           console.log("Conversion complete, proceeding with converted PDF", fileToUpload);
           setPrintStatus("Analyzing document colors...");
@@ -952,15 +956,19 @@ const Usb = () => {
           return;
         }
       } else if (fileToProcess.type === 'application/pdf') {
-        // For PDF files, get the page count
+        // For PDF files, get the page count and truncate if needed
         try {
           const pdfData = await fileToProcess.arrayBuffer();
-          const pdfDoc = await PDFDocument.load(pdfData);
-          pageCount = pdfDoc.getPageCount();
-          console.log(`PDF has ${pageCount} pages`);
+          const { pdfBytes, pageCount: truncatedPageCount } = await truncatePdfToTenPages(pdfData);
+          
+          // Create a new File object with the truncated PDF if needed
+          fileToUpload = new File([pdfBytes], fileToProcess.name, { type: 'application/pdf' });
+          pageCount = truncatedPageCount;
+          
+          console.log(`PDF has ${pageCount} pages after truncation`);
           setPrintStatus("Analyzing document colors...");
         } catch (error) {
-          console.error("Error getting PDF page count:", error);
+          console.error("Error processing PDF:", error);
           const fileSizeInKB = fileToProcess.size / 1024;
           pageCount = Math.max(1, Math.ceil(fileSizeInKB / 100)); // rough estimate
         }
@@ -979,7 +987,8 @@ const Usb = () => {
           pageCount: pageCount.toString(),
           fileName: selectedFile.name,
           original: selectedFile.name,
-          isConverted: isDocx ? "true" : "false"
+          isConverted: isDocx ? "true" : "false",
+          wasTruncated: (pageCount === 10).toString()
         }
       };
 
