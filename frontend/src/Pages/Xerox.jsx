@@ -9,7 +9,7 @@ import SelectColor from "../components/usb/select_color";
 import PrintSettings from "../components/common/PrintSettings";
 
 import { realtimeDb, storage } from '../../firebase/firebase_config';
-import { ref as dbRef, get, update, set, push } from "firebase/database";
+import { ref as dbRef, get, update, set, push, onValue } from "firebase/database";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 import axios from "axios";
 import ClientContainer from '../components/containers/ClientContainer';
@@ -42,20 +42,22 @@ const Xerox = () => {
   const [printProgress, setPrintProgress] = useState(0);
 
   useEffect(() => {
-    const fetchAvailableCoins = async () => {
-      const coinRef = dbRef(realtimeDb, "coinCount/availableCoins");
-      try {
-        const snapshot = await get(coinRef);
-        if (snapshot.exists()) {
-          setAvailableCoins(snapshot.val());
-        } else {
-          console.error("Error retrieving available coins.");
-        }
-      } catch (error) {
-        console.error("Error fetching available coins:", error);
+    // Set up real-time listener for available coins
+    const coinRef = dbRef(realtimeDb, "coinCount/availableCoins");
+    const unsubscribe = onValue(coinRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setAvailableCoins(snapshot.val());
+      } else {
+        console.error("Error retrieving available coins.");
+        setAvailableCoins(0);
       }
-    };
-    fetchAvailableCoins();
+    }, (error) => {
+      console.error("Error setting up coins listener:", error);
+      setAvailableCoins(0);
+    });
+
+    // Cleanup subscription on unmount
+    return () => unsubscribe();
   }, []);
 
   // Cleanup blob URLs when component unmounts
