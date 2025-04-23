@@ -4,7 +4,7 @@ import M_Password from '../components/M_Password';
 
 const Admin = () => {
   const [showModal, setShowModal] = useState(true);
-  const [paperCount, setPaperCount] = useState(82);
+  const [paperCount, setPaperCount] = useState(100);
   const [salesData, setSalesData] = useState({
     xerox: { total: 0, details: { 'Blk/wht': 0, 'Colored': 0 }, papers: 0, colorPages: 0, bwPages: 0 },
     usb: { total: 0, details: { 'Blk/wht': 0, 'Colored': 0 }, papers: 0, colorPages: 0, bwPages: 0 },
@@ -17,43 +17,10 @@ const Admin = () => {
 
   // Real-time data subscription for print jobs
   useEffect(() => {
-      const db = getDatabase();
-    const printJobsRef = dbRef(db, 'printJobs');
+    const db = getDatabase();
     const completedPrintsRef = dbRef(db, 'completedPrints');
-    
-    // Listen for changes in active print jobs
-    const printJobsUnsubscribe = onValue(printJobsRef, async (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        
-        // Process each print job
-        Object.entries(data).forEach(async ([jobId, job]) => {
-          // When a job is completed, move it to completedPrints
-          if (job.status === "completed" && !job.archived) {
-            try {
-              // Add to completedPrints
-              const completedJobRef = dbRef(db, `completedPrints/${jobId}`);
-              await set(completedJobRef, {
-                ...job,
-                completedAt: Date.now(),
-                archived: true
-              });
+    const paperRef = dbRef(db, 'paperCount');
 
-              // Mark the original job as archived
-              const originalJobRef = dbRef(db, `printJobs/${jobId}`);
-              await set(originalJobRef, {
-                ...job,
-                archived: true
-              });
-            } catch (error) {
-              console.error("Error archiving completed print job:", error);
-            }
-          }
-        });
-      }
-    });
-
-    // Listen for changes in completed prints
     const completedPrintsUnsubscribe = onValue(completedPrintsRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
@@ -73,6 +40,8 @@ const Admin = () => {
           }
 
           const pages = job.totalPages || 1;
+          const copies = job.copies || 1;
+          const totalPapersUsed = pages * copies;
           let totalPrice = 0;
           let colorPageCount = 0;
           let bwPageCount = 0;
@@ -96,30 +65,26 @@ const Admin = () => {
           }
 
           // Update the sales data for this source
-            newSalesData[source].total += totalPrice;
-          newSalesData[source].papers += pages;
-            newSalesData[source].colorPages += colorPageCount;
-            newSalesData[source].bwPages += bwPageCount;
-            newSalesData[source].details['Colored'] += colorPageCount * pricing.colorPrice;
-            newSalesData[source].details['Blk/wht'] += bwPageCount * pricing.bwPrice;
+          newSalesData[source].total += totalPrice;
+          newSalesData[source].papers += totalPapersUsed;
+          newSalesData[source].colorPages += colorPageCount * copies;
+          newSalesData[source].bwPages += bwPageCount * copies;
+          newSalesData[source].details['Colored'] += colorPageCount * pricing.colorPrice * copies;
+          newSalesData[source].details['Blk/wht'] += bwPageCount * pricing.bwPrice * copies;
         });
 
         setSalesData(newSalesData);
+
+        // Calculate remaining paper count
+        const totalPapersUsed = Object.values(newSalesData).reduce((total, data) => total + data.papers, 0);
+        const remainingPapers = Math.max(100 - totalPapersUsed, 0);
+        set(paperRef, remainingPapers);
+        setPaperCount(remainingPapers);
       }
     });
 
-    return () => {
-      printJobsUnsubscribe();
-      completedPrintsUnsubscribe();
-    };
-  }, [pricing]);
-
-  // Paper count subscription
-  useEffect(() => {
-    const db = getDatabase();
-    const paperRef = dbRef(db, 'paperCount');
-    
-    const unsubscribe = onValue(paperRef, (snapshot) => {
+    // Paper count subscription
+    const paperCountUnsubscribe = onValue(paperRef, (snapshot) => {
       if (!snapshot.exists()) {
         // Initialize with 100 papers if not set
         set(paperRef, 100);
@@ -129,8 +94,11 @@ const Admin = () => {
       }
     });
 
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      completedPrintsUnsubscribe();
+      paperCountUnsubscribe();
+    };
+  }, [pricing]);
 
   const handleReset = async () => {
     try {
@@ -152,6 +120,9 @@ const Admin = () => {
           usb: { total: 0, details: { 'Blk/wht': 0, 'Colored': 0 }, papers: 0, colorPages: 0, bwPages: 0 },
           qr: { total: 0, details: { 'Blk/wht': 0, 'Colored': 0 }, papers: 0, colorPages: 0, bwPages: 0 }
         });
+        // Reset paper count when clearing data
+        await set(dbRef(db, 'paperCount'), 100);
+        setPaperCount(100);
       } catch (error) {
         console.error("Error clearing sales data:", error);
       }
@@ -166,7 +137,10 @@ const Admin = () => {
         {/* Header */}
         <div className="flex justify-between items-center">
           <h1 className="text-4xl font-bold text-primary">Admin Dashboard</h1>
-      </div>
+          <button className="btn btn-error" onClick={handleClearData}>
+            Clear All Data
+          </button>
+        </div>
 
         {/* Paper Status Card */}
         <div className="card bg-base-100 shadow-xl">
@@ -218,7 +192,7 @@ const Admin = () => {
                   <div className="flex justify-between items-center">
                     <span className="text-base-content/80">Blk/wht</span>
                     <span className="font-semibold">₱{data.details['Blk/wht'].toFixed(2)}</span>
-                    </div>
+                  </div>
                 </div>
               </div>
             </div>
