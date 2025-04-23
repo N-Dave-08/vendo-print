@@ -10,6 +10,7 @@ import ActionCard from './ui/ActionCard';
 import { realtimeDb } from "../../firebase/firebase_config";
 import { ref as dbRef, onValue, remove, get, update, set } from "firebase/database";
 import axios from 'axios';
+import { deleteUploadedFile } from '../utils/fileOperations';
 
 const Printer = () => {
   const navigate = useNavigate();
@@ -25,6 +26,8 @@ const Printer = () => {
   const [completedJobs, setCompletedJobs] = useState({});
   // Ref to store the previous job data for comparison to detect newly completed jobs
   const prevJobsRef = useRef({});
+  // Add state to track file deletion
+  const [fileDeletionPending, setFileDeletionPending] = useState(false);
 
   // Process any pending print job from sessionStorage
   useEffect(() => {
@@ -766,6 +769,51 @@ const Printer = () => {
       default: return "badge-ghost";
     }
   };
+
+  useEffect(() => {
+    // Check for completed print jobs and handle file deletion
+    const handleCompletedPrintJobs = async () => {
+      const fileToDelete = sessionStorage.getItem('fileToDeleteAfterPrint');
+      if (fileToDelete && !fileDeletionPending) {
+        const { id, fileUrl } = JSON.parse(fileToDelete);
+        
+        // Check if there are any print jobs for this file that are still in progress
+        // or if any jobs for this file ended in error
+        const relatedJobs = printJobs.filter(job => job.fileUrl === fileUrl);
+        const hasInProgressJobs = relatedJobs.some(job => 
+          job.status !== 'completed' && 
+          job.status !== 'error'
+        );
+        const hasSuccessfulPrint = relatedJobs.some(job =>
+          job.status === 'completed' || 
+          (job.progress === 100 && job.status !== 'error')
+        );
+        const hasErrorJobs = relatedJobs.some(job => job.status === 'error');
+
+        // Only delete if:
+        // 1. There are no jobs in progress
+        // 2. At least one job completed successfully
+        // 3. No jobs ended in error
+        if (!hasInProgressJobs && hasSuccessfulPrint && !hasErrorJobs) {
+          try {
+            setFileDeletionPending(true);
+            await deleteUploadedFile(id, fileUrl);
+            // Clear the stored file info after successful deletion
+            sessionStorage.removeItem('fileToDeleteAfterPrint');
+          } catch (error) {
+            console.error('Error deleting file after print:', error);
+          } finally {
+            setFileDeletionPending(false);
+          }
+        } else if (!hasInProgressJobs && hasErrorJobs) {
+          // If print failed, remove the deletion request
+          sessionStorage.removeItem('fileToDeleteAfterPrint');
+        }
+      }
+    };
+
+    handleCompletedPrintJobs();
+  }, [printJobs, fileDeletionPending]);
 
   return (
     <div className="min-h-screen bg-base-200">

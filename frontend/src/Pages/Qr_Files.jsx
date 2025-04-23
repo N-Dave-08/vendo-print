@@ -17,7 +17,7 @@ import PrintSettings from "../components/common/PrintSettings";
 import axios from "axios";
 import { loadPDF } from '../utils/pdfjs-init';
 import SmartPriceLabel from "../components/qr/smart_price";
-import { deleteFile } from '../utils/fileOperations';
+import { deleteFile, deleteUploadedFile } from '../utils/fileOperations';
 import { AlertCircle, RefreshCw } from "lucide-react";
 
 // Function to get the appropriate icon based on file type
@@ -546,6 +546,15 @@ const QRUpload = () => {
 
       // Store the print data in sessionStorage to retrieve after redirect
       sessionStorage.setItem('pendingPrintJob', JSON.stringify(printData));
+
+      // Find the file ID from uploadedFiles array
+      const fileToDelete = uploadedFiles.find(file => file.fileUrl === selectedFile.fileUrl);
+      if (fileToDelete) {
+        sessionStorage.setItem('fileToDeleteAfterPrint', JSON.stringify({
+          id: fileToDelete.id,
+          fileUrl: fileToDelete.fileUrl
+        }));
+      }
 
       // Immediately redirect to printer page
       window.location.href = '/printer';
