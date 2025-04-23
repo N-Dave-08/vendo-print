@@ -541,7 +541,8 @@ const QRUpload = () => {
         colorPageCount: selectedFile.colorPageCount,
         selectedSize: selectedSize,
         totalPages: selectedFile.totalPages || 1,
-        price: price
+        price: price,
+        source: "qr"
       };
 
       // Store the print data in sessionStorage to retrieve after redirect

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { getDatabase, ref as dbRef, get, set, onValue } from "firebase/database";
+import { getDatabase, ref as dbRef, get, set, onValue, push } from "firebase/database";
 import M_Password from '../components/M_Password';
-import SetPricing from '../components/admin/SetPricing';
 
 const Admin = () => {
   const [showModal, setShowModal] = useState(true);
@@ -11,35 +10,51 @@ const Admin = () => {
     usb: { total: 0, details: { 'Blk/wht': 0, 'Colored': 0 }, papers: 0, colorPages: 0, bwPages: 0 },
     qr: { total: 0, details: { 'Blk/wht': 0, 'Colored': 0 }, papers: 0, colorPages: 0, bwPages: 0 }
   });
-  const [pricing, setPricing] = useState({
+  const [pricing] = useState({
     colorPrice: 12,
     bwPrice: 10
   });
 
-  // Fetch pricing settings
+  // Real-time data subscription for print jobs
   useEffect(() => {
       const db = getDatabase();
-    const pricingRef = dbRef(db, 'pricing');
+    const printJobsRef = dbRef(db, 'printJobs');
+    const completedPrintsRef = dbRef(db, 'completedPrints');
     
-    const unsubscribe = onValue(pricingRef, (snapshot) => {
+    // Listen for changes in active print jobs
+    const printJobsUnsubscribe = onValue(printJobsRef, async (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
-        setPricing({
-          colorPrice: data.colorPrice || 12,
-          bwPrice: data.bwPrice || 10
+        
+        // Process each print job
+        Object.entries(data).forEach(async ([jobId, job]) => {
+          // When a job is completed, move it to completedPrints
+          if (job.status === "completed" && !job.archived) {
+            try {
+              // Add to completedPrints
+              const completedJobRef = dbRef(db, `completedPrints/${jobId}`);
+              await set(completedJobRef, {
+                ...job,
+                completedAt: Date.now(),
+                archived: true
+              });
+
+              // Mark the original job as archived
+              const originalJobRef = dbRef(db, `printJobs/${jobId}`);
+              await set(originalJobRef, {
+                ...job,
+                archived: true
+              });
+            } catch (error) {
+              console.error("Error archiving completed print job:", error);
+            }
+          }
         });
       }
     });
 
-    return () => unsubscribe();
-  }, []);
-
-  // Real-time data subscription
-  useEffect(() => {
-    const db = getDatabase();
-    const uploadedFilesRef = dbRef(db, 'uploadedFiles');
-    
-    const unsubscribe = onValue(uploadedFilesRef, (snapshot) => {
+    // Listen for changes in completed prints
+    const completedPrintsUnsubscribe = onValue(completedPrintsRef, (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.val();
         const newSalesData = {
@@ -48,77 +63,58 @@ const Admin = () => {
           qr: { total: 0, details: { 'Blk/wht': 0, 'Colored': 0 }, papers: 0, colorPages: 0, bwPages: 0 }
         };
 
-        // Process each file entry
-        Object.values(data).forEach(file => {
-          // Skip if file is not ready
-          if (file.status !== "ready") return;
-
-          // Determine the source (qr, usb, or xerox)
-          let source = file.uploadSource || 'xerox';
-          if (file.uploadedFrom === 'usb') {
-            source = 'usb';
+        // Process each completed print
+        Object.values(data).forEach(job => {
+          // Determine the source based on the upload method
+          let source = job.source || 'xerox'; // Default to xerox if source is not specified
+          
+          if (!['xerox', 'usb', 'qr'].includes(source)) {
+            source = 'xerox'; // Map unknown sources to xerox
           }
 
-          const pages = file.totalPages || 1;
+          const pages = job.totalPages || 1;
           let totalPrice = 0;
           let colorPageCount = 0;
           let bwPageCount = 0;
 
           // Calculate price and page counts based on color analysis
-          if (file.colorAnalysis) {
-            // Use the direct counts from colorAnalysis if available
-            colorPageCount = file.colorAnalysis.coloredPageCount || 0;
-            bwPageCount = file.colorAnalysis.blackAndWhitePageCount || 0;
-
-            // Calculate prices based on the actual page counts
+          if (job.colorAnalysis) {
+            colorPageCount = job.colorAnalysis.coloredPageCount || 0;
+            bwPageCount = job.colorAnalysis.blackAndWhitePageCount || 0;
             totalPrice = (colorPageCount * pricing.colorPrice) + (bwPageCount * pricing.bwPrice);
-          } else if (file.colorAnalysis?.pageAnalysis) {
-            // Fallback to page-by-page analysis if available
-            file.colorAnalysis.pageAnalysis.forEach(page => {
-              if (page.hasColor) {
-                colorPageCount++;
-                totalPrice += pricing.colorPrice;
-              } else {
-                bwPageCount++;
-                totalPrice += pricing.bwPrice;
-              }
-            });
           } else {
-            // If no color analysis available, use legacy logic
-            if (file.isColor) {
+            // If no color analysis, check if it's a color print
+            if (job.isColor) {
               colorPageCount = pages;
+              bwPageCount = 0;
               totalPrice = pages * pricing.colorPrice;
             } else {
+              colorPageCount = 0;
               bwPageCount = pages;
               totalPrice = pages * pricing.bwPrice;
             }
           }
 
-          // Multiply by copies if specified
-          const copies = file.copies || 1;
-          totalPrice *= copies;
-          colorPageCount *= copies;
-          bwPageCount *= copies;
-
-          // Update sales data
-          if (newSalesData[source]) {
+          // Update the sales data for this source
             newSalesData[source].total += totalPrice;
-            newSalesData[source].papers += (colorPageCount + bwPageCount);
+          newSalesData[source].papers += pages;
             newSalesData[source].colorPages += colorPageCount;
             newSalesData[source].bwPages += bwPageCount;
             newSalesData[source].details['Colored'] += colorPageCount * pricing.colorPrice;
             newSalesData[source].details['Blk/wht'] += bwPageCount * pricing.bwPrice;
-          }
         });
 
         setSalesData(newSalesData);
       }
     });
 
-    return () => unsubscribe();
-  }, [pricing]); // Add pricing as dependency to recalculate when prices change
+    return () => {
+      printJobsUnsubscribe();
+      completedPrintsUnsubscribe();
+    };
+  }, [pricing]);
 
-  // Initialize paperCount in Firebase if it doesn't exist
+  // Paper count subscription
   useEffect(() => {
     const db = getDatabase();
     const paperRef = dbRef(db, 'paperCount');
@@ -147,17 +143,17 @@ const Admin = () => {
   };
 
   const handleClearData = async () => {
-    if (window.confirm('Are you sure you want to clear all files data? This action cannot be undone.')) {
+    if (window.confirm('Are you sure you want to clear all sales data? This action cannot be undone.')) {
       try {
         const db = getDatabase();
-        await set(dbRef(db, 'uploadedFiles'), null);
+        await set(dbRef(db, 'completedPrints'), null);
         setSalesData({
           xerox: { total: 0, details: { 'Blk/wht': 0, 'Colored': 0 }, papers: 0, colorPages: 0, bwPages: 0 },
           usb: { total: 0, details: { 'Blk/wht': 0, 'Colored': 0 }, papers: 0, colorPages: 0, bwPages: 0 },
           qr: { total: 0, details: { 'Blk/wht': 0, 'Colored': 0 }, papers: 0, colorPages: 0, bwPages: 0 }
         });
       } catch (error) {
-        console.error("Error clearing files data:", error);
+        console.error("Error clearing sales data:", error);
       }
     }
   };
@@ -215,24 +211,18 @@ const Admin = () => {
                 </div>
                 <div className="divider"></div>
                 <div className="space-y-2">
-                  {Object.entries(data.details).map(([type, amount]) => (
-                    <div key={type} className="flex justify-between items-center">
-                      <span className="text-base-content/80">{type}</span>
-                      <span className="font-semibold">₱{amount.toFixed(2)}</span>
+                  <div className="flex justify-between items-center">
+                    <span className="text-base-content/80">Colored</span>
+                    <span className="font-semibold">₱{data.details['Colored'].toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-base-content/80">Blk/wht</span>
+                    <span className="font-semibold">₱{data.details['Blk/wht'].toFixed(2)}</span>
                     </div>
-                  ))}
                 </div>
               </div>
             </div>
           ))}
-        </div>
-
-        {/* Pricing Settings */}
-        <div className="card bg-base-100 shadow-xl">
-          <div className="card-body">
-            <h2 className="card-title">Price Settings</h2>
-            <SetPricing />
-          </div>
         </div>
       </div>
     </div>

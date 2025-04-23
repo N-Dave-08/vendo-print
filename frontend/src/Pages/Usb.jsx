@@ -1099,7 +1099,7 @@ const Usb = () => {
 
   // Update the handlePrint function
   const handlePrint = async () => {
-    if (!fileToUpload) {
+    if (!filePreviewUrl) {
       alert("Please select a file to print first.");
       return;
     }
@@ -1120,7 +1120,7 @@ const Usb = () => {
 
       // Get actual page count from the file if it's a PDF
       let actualPages = totalPages;
-      if (fileToUpload.type === "application/pdf") {
+      if (fileToUpload?.type === "application/pdf") {
         try {
           const pdfData = await fileToUpload.arrayBuffer();
           const pdfDoc = await PDFDocument.load(pdfData);
@@ -1134,7 +1134,7 @@ const Usb = () => {
       // Initialize the print job in Firebase first
       const printJobsRef = dbRef(realtimeDb, `printJobs/${printJobId}`);
       await set(printJobsRef, {
-        fileName: fileToUpload.name,
+        fileName: fileToUpload?.name || "document.pdf",
         fileUrl: filePreviewUrl,
         printerName: selectedPrinter,
         copies: copies,
@@ -1145,6 +1145,7 @@ const Usb = () => {
         statusMessage: "Initializing print job...",
         createdAt: Date.now(),
         price: calculatedPrice,
+        source: "usb",
         // Only include colorAnalysis if it exists
         ...(colorAnalysis && { colorAnalysis })
       });
@@ -1159,7 +1160,7 @@ const Usb = () => {
       // Prepare the print request data
       const printData = {
         fileUrl: filePreviewUrl,
-        fileName: fileToUpload.name,
+        fileName: fileToUpload?.name || "document.pdf",
         printerName: selectedPrinter,
         copies: copies,
         isColor: isColor,

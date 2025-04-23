@@ -281,7 +281,32 @@ const Xerox = () => {
       // Create a unique ID for the print job
       const printJobId = Date.now().toString();
 
-      // Initialize the print job in Firebase first
+      // Update the uploaded file in Firebase with color mode information
+      const uploadedFilesRef = dbRef(realtimeDb, 'uploadedFiles');
+      const snapshot = await get(uploadedFilesRef);
+      
+      if (snapshot.exists()) {
+        const files = snapshot.val();
+        // Find the most recent scanner upload (our current document)
+        const currentFile = Object.entries(files)
+          .filter(([_, file]) => file.uploadSource === 'scanner')
+          .sort((a, b) => new Date(b[1].uploadedAt) - new Date(a[1].uploadedAt))[0];
+
+        if (currentFile) {
+          const [fileId, fileData] = currentFile;
+          // Update the file with color information
+          await update(dbRef(realtimeDb, `uploadedFiles/${fileId}`), {
+            isColor: isColor,
+            colorAnalysis: {
+              hasColoredPages: isColor,
+              coloredPageCount: isColor ? (fileData.totalPages || 1) : 0,
+              blackAndWhitePageCount: isColor ? 0 : (fileData.totalPages || 1)
+            }
+          });
+        }
+      }
+
+      // Initialize the print job in Firebase
       const printJobsRef = dbRef(realtimeDb, `printJobs/${printJobId}`);
       await set(printJobsRef, {
         fileName: "Scanned Document",
@@ -295,7 +320,8 @@ const Xerox = () => {
         statusMessage: "Initializing print job...",
         createdAt: Date.now(),
         price: calculatedPrice,
-        fileType: "image/jpeg"
+        fileType: "image/jpeg",
+        source: "xerox"
       });
 
       // Update coins immediately

@@ -168,7 +168,8 @@ const Printer = () => {
               status: "pending",
               progress: 0,
               createdAt: timestamp,
-              price: printData.price
+              price: printData.price,
+              source: printData.source || 'qr' // Default to 'qr' since this is used by QR component
             });
             
             // Update job status
