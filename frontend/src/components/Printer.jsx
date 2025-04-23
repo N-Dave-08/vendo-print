@@ -858,21 +858,6 @@ const Printer = () => {
                   <div className="badge badge-primary">{printJobs.length}</div>
                 )}
               </h2>
-              
-              {printJobs.length > 0 && (
-                <button 
-                  className="btn btn-error btn-sm gap-2"
-                  onClick={clearAllPrintJobs}
-                  disabled={isClearing}
-                >
-                  {isClearing ? (
-                    <BiLoaderAlt className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Trash2 className="h-4 w-4" />
-                  )}
-                  Clear All
-                </button>
-              )}
             </div>
             <div className="divider mt-0" />
             
@@ -966,14 +951,6 @@ const Printer = () => {
                               {new Date(job.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           </div>
-                          
-                          <button 
-                            className="btn btn-ghost btn-xs text-error"
-                            onClick={() => handleRemoveJob(job.id)}
-                          >
-                            <X className="w-3 h-3 mr-1" />
-                            Remove
-                          </button>
                         </div>
                       </div>
                     </div>
