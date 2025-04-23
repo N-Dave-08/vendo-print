@@ -972,14 +972,53 @@ const updatePrintJobProgress = async (jobId, progress, status = "", statusMessag
       updateData.statusMessage = statusMessage;
     }
     
-    // If job is being marked as complete, track it to prevent restarting
+    // If job is being marked as complete
     if (progress >= 100 || status === "completed") {
+      // Update tracking sets
       completedPrintJobs.add(jobId);
       recentPrintJobs.set(`completed-${jobId}`, Date.now());
-      console.log(`Marked job ${jobId} as completed and added to tracking`);
+      
+      // Ensure completion data is set
+      updateData.progress = 100;
+      updateData.status = "completed";
+      updateData.statusMessage = statusMessage || "Print job completed successfully";
+      updateData.completedAt = Date.now();
+
+      // Prepare job data for completedPrints
+      const jobData = {
+        ...currentJob,
+        ...updateData
+      };
+
+      // Update color analysis if printed in black and white
+      if (jobData.isColor === false) {
+        const totalPages = jobData.totalPages || 1;
+        jobData.colorAnalysis = {
+          hasColoredPages: false,
+          coloredPageCount: 0,
+          blackAndWhitePageCount: totalPages,
+          coloredPages: [],
+          blackAndWhitePages: Array.from({ length: totalPages }, (_, i) => i + 1)
+        };
+      }
+
+      try {
+        // First update the printJobs node
+        await update(dbRef(db, `printJobs/${jobId}`), updateData);
+        
+        // Then add to completedPrints node
+        await update(dbRef(db, `completedPrints/${jobId}`), jobData);
+        
+        console.log(`Successfully updated job ${jobId} and added to completedPrints`);
+      } catch (error) {
+        console.error(`Error updating completion status for job ${jobId}:`, error);
+        throw error; // Re-throw to be caught by outer try-catch
+      }
+    } else {
+      // Just update progress if not completing
+      await update(dbRef(db, `printJobs/${jobId}`), updateData);
     }
     
-    await update(dbRef(db, `printJobs/${jobId}`), updateData);
     console.log(`Updated job ${jobId} progress to ${progress}%${status ? `, status: ${status}` : ''}`);
     
     // Also send update to the API endpoint for potential future use
@@ -1660,11 +1699,8 @@ const enhancedPrintFileHandler = async (req, res) => {
 
 // Export the enhanced version as the main printFileHandler
 export const printFileHandler = async (req, res) => {
-  // Get a print job ID for tracking progress - prioritize printJobId over jobId 
-  // for backward compatibility with different frontend components
   const printJobId = req.body.printJobId || req.body.jobId || Date.now().toString();
   
-  // Skip processing if this job has already been completed to prevent restarting
   if (completedPrintJobs.has(printJobId)) {
     console.log(`Job ${printJobId} has already completed, returning success without reprocessing`);
     return res.json({
@@ -1680,14 +1716,10 @@ export const printFileHandler = async (req, res) => {
   await updatePrintJobProgress(printJobId, 0, "pending", "Starting print job...");
 
   try {
-    // Extract file name from request for duplicate prevention
     const fileName = req.body.fileName || (req.file ? req.file.originalname : 'unknown');
     
-    // Check if this is a duplicate print job
     if (trackPrintJob(printJobId, fileName)) {
       console.log(`Detected duplicate print job for "${fileName}" with ID ${printJobId}`);
-      
-      // Return success but don't actually print again
       return res.json({
         status: 'success',
         message: 'Print job already in progress',
@@ -1697,42 +1729,6 @@ export const printFileHandler = async (req, res) => {
         }
       });
     }
-    
-    // First, determine if this is a Word document that should be handled by the enhanced handler
-    const { fileUrl, fileType } = req.body;
-    
-    // Determine file extension from fileName or fileType parameter
-    let fileExtension = 'pdf'; // Default extension
-    
-    if (fileType) {
-      fileExtension = fileType.toLowerCase();
-    } else if (fileName) {
-      const lastDotIndex = fileName.lastIndexOf('.');
-      if (lastDotIndex !== -1) {
-        fileExtension = fileName.substring(lastDotIndex + 1).toLowerCase();
-      }
-    } else if (fileUrl) {
-      // Try to get extension from URL if available
-      const urlFileName = fileUrl.split('/').pop()?.split('?')[0];
-      if (urlFileName && urlFileName.includes('.')) {
-        fileExtension = urlFileName.split('.').pop().toLowerCase();
-      }
-    }
-    
-    console.log(`Print request for file type: ${fileExtension}`);
-    
-    // If it's a Word document and not a direct file upload, use the enhanced handler
-    if (['doc', 'docx'].includes(fileExtension) && !req.file) {
-      console.log("Routing to enhanced Word document handler");
-      return enhancedPrintFileHandler(req, res);
-    }
-    
-    // Otherwise proceed with standard printing flow
-    console.log("Processing with standard print handler");
-
-  // Local file path for temp file
-  let filePath;
-  let printResult;
 
     // Extract request parameters
     const { 
@@ -1741,7 +1737,8 @@ export const printFileHandler = async (req, res) => {
       selectedSize = 'Short Bond',
       orientation = 'portrait',
       isColor = true, 
-      totalPages = 1
+      totalPages: requestedTotalPages = 1,
+      fileUrl
     } = req.body;
 
     if (!fileUrl && !req.file) {
@@ -1752,30 +1749,28 @@ export const printFileHandler = async (req, res) => {
       throw new Error('Printer name is required');
     }
 
-    const requestFileType = fileType ? fileType.toLowerCase() : '';
+    const requestFileType = req.body.fileType ? req.body.fileType.toLowerCase() : '';
 
     await updatePrintJobProgress(printJobId, 10, "processing", "Preparing document...");
 
-    // Check if we have a file upload or remote URL
+    // Download and process file
+    let filePath;
+    let actualTotalPages = requestedTotalPages;
+
     if (req.file) {
-      // Direct file upload (multipart form)
       filePath = req.file.path;
       await updatePrintJobProgress(printJobId, 20, "processing", "Processing uploaded file...");
     } else if (fileUrl) {
-      // Remote file URL
       await updatePrintJobProgress(printJobId, 20, "processing", "Downloading file...");
       
-      // Create the temp directory if it doesn't exist
       const tempDir = path.join(__dirname, 'temp');
       if (!fs.existsSync(tempDir)) {
         fs.mkdirSync(tempDir, { recursive: true });
       }
       
-      // Generate a unique filename for the temp file
       const uniqueId = uuidv4();
       filePath = path.join(tempDir, `${uniqueId}_${fileName || path.basename(fileUrl)}`);
       
-      // Download the file from the provided URL
       try {
         await downloadFile(fileUrl, filePath);
         await updatePrintJobProgress(printJobId, 40, "processing", "File downloaded successfully");
@@ -1787,25 +1782,41 @@ export const printFileHandler = async (req, res) => {
       throw new Error('Invalid file source');
     }
 
-    // Get file extension and content type for determining file type
+    // Get file extension and content type
     const fileExt = path.extname(filePath).toLowerCase();
     const contentType = req.body.contentType || '';
 
-    // Print options based on form inputs
+    // Determine actual page count for PDFs
+    if (fileExt === '.pdf' || requestFileType === 'pdf' || contentType === 'application/pdf') {
+      try {
+        const pdfBytes = fs.readFileSync(filePath);
+        const pdfDoc = await PDFDocument.load(pdfBytes);
+        actualTotalPages = pdfDoc.getPageCount();
+        console.log(`Detected ${actualTotalPages} pages in PDF document`);
+        
+        // Update the print job with actual page count
+        await update(dbRef(db, `printJobs/${printJobId}`), {
+          totalPages: actualTotalPages
+        });
+      } catch (pdfError) {
+        console.warn('Could not determine PDF page count:', pdfError);
+      }
+    }
+
+    // Print options with actual page count
     const printOptions = {
       copies: parseInt(copies) || 1,
       selectedSize,
       orientation,
-      totalPages: parseInt(totalPages) || 1
+      totalPages: actualTotalPages
     };
 
     // Process the file based on its type
     await updatePrintJobProgress(printJobId, 50, "processing", "Processing file for printing...");
 
-    // Determine file type based on extension or explicitly provided fileType
+    let printResult;
     if (fileExt === '.pdf' || requestFileType === 'pdf' || contentType === 'application/pdf') {
       await updatePrintJobProgress(printJobId, 60, "processing", "Sending PDF to printer...");
-      // Use direct PDF printing for more reliable results
       printResult = await printPdfDirect(filePath, printerName, isColor);
     } else if (['.doc', '.docx'].includes(fileExt) || requestFileType === 'doc' || requestFileType === 'docx' || 
                contentType.includes('word') || contentType.includes('officedocument')) {
@@ -1817,87 +1828,82 @@ export const printFileHandler = async (req, res) => {
       await updatePrintJobProgress(printJobId, 60, "processing", "Processing image...");
       printResult = await printImageFile(filePath, printerName, isColor, orientation);
     } else {
-      console.error(`Unsupported file type: fileExt=${fileExt}, requestFileType=${requestFileType}, contentType=${contentType}`);
       throw new Error('Unsupported file type');
     }
 
     await updatePrintJobProgress(printJobId, 75, "printing", "Printing in progress...");
 
-    // Change the async setTimeout approach to return immediately while printing continues
-    // This prevents the frontend from thinking the process has stalled
-    
     // Start an asynchronous progress update without blocking the response
     (async () => {
       try {
-        // Wait for print job to likely be sent to printer
         await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Update to 95% before final completion
         await updatePrintJobProgress(printJobId, 95, "printing", "Finishing print job...");
         
-        // Clean up temp file
         try {
           fs.unlinkSync(filePath);
         } catch (cleanupError) {
           console.error('Error cleaning up temp file:', cleanupError);
         }
 
-        // Check for completion for up to 15 seconds with more reliable approach
-        console.log(`Waiting for print job ${printJobId} to complete...`);
-        
-        // More reliable completion tracking
-        let retryCount = 0;
-        const maxRetries = 15;
-        
-        while (retryCount < maxRetries) {
-          try {
-            // Even if we're running as admin, there can still be issues with updating the final status
-            // Force a direct database update for 100% completion
-            await update(dbRef(db, `printJobs/${printJobId}`), {
-              progress: 100,
-              status: "completed",
-              statusMessage: "Print job completed successfully",
-              updatedAt: Date.now()
-            });
-            
-            // Double-check if our update was successful
-            if (!completedPrintJobs.has(printJobId)) {
-              completedPrintJobs.add(printJobId);
-              recentPrintJobs.set(`completed-${printJobId}`, Date.now());
-              console.log(`Marked job ${printJobId} as completed and added to tracking`);
-            }
-            
-            // Break out of the retry loop since we've successfully marked the job as complete
-            console.log(`Successfully updated job ${printJobId} to 100% completed`);
-            break;
-          } catch (updateError) {
-            console.warn(`Retry ${retryCount + 1}/${maxRetries}: Error updating job completion status:`, updateError);
-            retryCount++;
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
+        const jobSnapshot = await get(dbRef(db, `printJobs/${printJobId}`));
+        if (!jobSnapshot.exists()) {
+          console.error(`Print job ${printJobId} not found for completion`);
+          return;
         }
+
+        const jobData = jobSnapshot.val();
         
-        // One final attempt with the regular function in case the direct approach failed
-        if (retryCount >= maxRetries) {
-          console.log(`Maximum retries reached for job ${printJobId}, making final attempt...`);
-          await updatePrintJobProgress(printJobId, 100, "completed", "Print job completed successfully");
+        // Prepare completion data with actual page count
+        const completionData = {
+          ...jobData,
+          progress: 100,
+          status: "completed",
+          statusMessage: "Print job completed successfully",
+          completedAt: Date.now(),
+          totalPages: actualTotalPages, // Ensure actual page count is used
+          isColor: isColor // Make sure we store the print mode that was used
+        };
+
+        // Update color analysis - if printed in black and white, ALL pages are black and white
+        if (!isColor) {
+          completionData.colorAnalysis = {
+            hasColoredPages: false,
+            coloredPageCount: 0,
+            blackAndWhitePageCount: actualTotalPages,
+            coloredPages: [],
+            blackAndWhitePages: Array.from({ length: actualTotalPages }, (_, i) => i + 1)
+          };
         }
+
+        // First update printJobs
+        await update(dbRef(db, `printJobs/${printJobId}`), completionData);
+        
+        // Then add to completedPrints
+        await update(dbRef(db, `completedPrints/${printJobId}`), completionData);
+        
+        // Update tracking sets
+        completedPrintJobs.add(printJobId);
+        recentPrintJobs.set(`completed-${printJobId}`, Date.now());
+        
+        console.log(`Successfully completed print job ${printJobId} and added to completedPrints`);
       } catch (progressError) {
         console.error('Error updating final print status:', progressError);
       }
     })();
 
-    // Return success immediately without waiting for the progress updates
-    res.json({
+    // Return success immediately
+    return res.json({
       status: 'success',
       message: 'Print job started successfully',
-      printJobId: printJobId
+      printJobId: printJobId,
+      details: {
+        actualPages: actualTotalPages
+      }
     });
 
   } catch (error) {
     console.error('Print error:', error);
 
-    // Update Firebase with error status - maintain progress at 75% instead of resetting to 0
     if (printJobId) {
       await updatePrintJobProgress(printJobId, 75, "error", `Error: ${error.message || "Failed to print document"}`);
     }
