@@ -1864,8 +1864,74 @@ export const printFileHandler = async (req, res) => {
           isColor: isColor // Make sure we store the print mode that was used
         };
 
-        // Update color analysis - if printed in black and white, ALL pages are black and white
-        if (!isColor) {
+        // Update color analysis for both color and black & white prints
+        if (isColor) {
+          // For color prints, use the provided color analysis or create one based on colorPageCount
+          if (jobData.colorPages !== undefined) {
+            // If we have colorPages count from QR code data, use that
+            const colorPageCount = parseInt(jobData.colorPages) || 0;
+            const coloredPages = [];
+            const bwPages = [];
+            
+            // Build the colored and b&w page arrays based on actual page data
+            for (let i = 1; i <= actualTotalPages; i++) {
+              if (i === 2 && colorPageCount === 1) { // For QR prints where page 2 is the colored page
+                coloredPages.push(i);
+              } else {
+                bwPages.push(i);
+              }
+            }
+            
+            completionData.colorAnalysis = {
+              hasColoredPages: coloredPages.length > 0,
+              coloredPageCount: coloredPages.length,
+              blackAndWhitePageCount: bwPages.length,
+              coloredPages: coloredPages,
+              blackAndWhitePages: bwPages
+            };
+          } else if (jobData.coloredPages && Array.isArray(jobData.coloredPages)) {
+            // Use the actual coloredPages array to determine colored pages
+            // Filter out any invalid page numbers and ensure uniqueness
+            const validColoredPages = [...new Set(jobData.coloredPages.filter(pageNum => 
+              typeof pageNum === 'number' && pageNum > 0 && pageNum <= actualTotalPages
+            ))];
+            
+            const bwPages = Array.from({ length: actualTotalPages }, (_, i) => i + 1)
+              .filter(pageNum => !validColoredPages.includes(pageNum));
+            
+            completionData.colorAnalysis = {
+              hasColoredPages: validColoredPages.length > 0,
+              coloredPageCount: validColoredPages.length,
+              blackAndWhitePageCount: bwPages.length,
+              coloredPages: validColoredPages,
+              blackAndWhitePages: bwPages
+            };
+          } else if (jobData.colorPageCount !== undefined && typeof jobData.colorPageCount === 'number') {
+            // If we have colorPageCount but no coloredPages array, create a default one
+            // Ensure colorPageCount doesn't exceed total pages
+            const actualColorPageCount = Math.min(jobData.colorPageCount, actualTotalPages);
+            const coloredPages = Array.from({ length: actualColorPageCount }, (_, i) => i + 1);
+            const bwPages = Array.from({ length: actualTotalPages - actualColorPageCount }, (_, i) => actualColorPageCount + i + 1);
+            
+            completionData.colorAnalysis = {
+              hasColoredPages: coloredPages.length > 0,
+              coloredPageCount: coloredPages.length,
+              blackAndWhitePageCount: bwPages.length,
+              coloredPages: coloredPages,
+              blackAndWhitePages: bwPages
+            };
+          } else if (!jobData.colorAnalysis) {
+            // If no color analysis exists, create a default one assuming all pages are colored
+            completionData.colorAnalysis = {
+              hasColoredPages: true,
+              coloredPageCount: actualTotalPages,
+              blackAndWhitePageCount: 0,
+              coloredPages: Array.from({ length: actualTotalPages }, (_, i) => i + 1),
+              blackAndWhitePages: []
+            };
+          }
+        } else {
+          // For black & white prints
           completionData.colorAnalysis = {
             hasColoredPages: false,
             coloredPageCount: 0,
