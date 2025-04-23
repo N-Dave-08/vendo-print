@@ -39,7 +39,6 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
   const [printSettings, setPrintSettings] = useState({
     copies: printOptions.copies || 1,
     isColor: printOptions.isColor || false,
-    orientation: printOptions.orientation || "portrait",
     paperSize: printOptions.paperSize || "letter", // Use letter size (8.5x11)
     scale: printOptions.scale || "fit-to-page" // Set scale to fit to page
   });
@@ -122,10 +121,6 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
     setPrintSettings({ ...printSettings, isColor: e.target.checked });
   };
 
-  const handleOrientationChange = (e) => {
-    setPrintSettings({ ...printSettings, orientation: e.target.value });
-  };
-
   const handlePrint = async () => {
     try {
       setLoading(true);
@@ -145,7 +140,6 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
       formData.append('printerName', printerName || 'EPSON L3210 Series');
       formData.append('isColor', printSettings.isColor);
       formData.append('copies', printSettings.copies);
-      formData.append('orientation', printSettings.orientation);
       formData.append('paperSize', printSettings.paperSize);
       formData.append('scale', printSettings.scale);
       formData.append('jobId', printJobId);
@@ -230,18 +224,6 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
               </label>
             </div>
 
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Orientation</label>
-              <select
-                value={printSettings.orientation}
-                onChange={handleOrientationChange}
-                className="w-full px-3 py-2 border rounded-md"
-              >
-                <option value="portrait">Portrait</option>
-                <option value="landscape">Landscape</option>
-              </select>
-            </div>
-
             {/* Paper Size */}
             <div className="mb-4">
               <label className="block text-sm font-medium text-gray-700 mb-1">Paper Size</label>
@@ -303,7 +285,7 @@ const PrintPreview = ({ fileUrl, onClose, printOptions = {} }) => {
         {/* Footer */}
         <div className="p-4 border-t flex justify-between items-center">
           <div className="text-sm text-gray-500">
-            {!loading && !printSuccess && `${printSettings.copies} ${printSettings.copies > 1 ? 'copies' : 'copy'}, ${printSettings.isColor ? 'Color' : 'Black & White'}, ${printSettings.orientation}, Letter (8.5 x 11 in), Fit to page`}
+            {!loading && !printSuccess && `${printSettings.copies} ${printSettings.copies > 1 ? 'copies' : 'copy'}, ${printSettings.isColor ? 'Color' : 'Black & White'}, ${printSettings.paperSize}, Fit to page`}
           </div>
           <div className="flex space-x-2">
             <button

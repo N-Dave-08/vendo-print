@@ -76,7 +76,6 @@ const QRUpload = () => {
   // Print dialog state
   const [isPrintDialogOpen, setIsPrintDialogOpen] = useState(false);
   const [printers, setPrinters] = useState([]);
-  const [orientation, setOrientation] = useState("portrait");
   const [selectedSize, setSelectedSize] = useState("Short Bond");
   
   // Print settings
@@ -540,7 +539,6 @@ const QRUpload = () => {
         isColor: isColor,
         hasColorPages: selectedFile.hasColorPages,
         colorPageCount: selectedFile.colorPageCount,
-        orientation: orientation,
         selectedSize: selectedSize,
         totalPages: selectedFile.totalPages || 1,
         price: price
@@ -1064,36 +1062,7 @@ const QRUpload = () => {
                             </div>
                           </div>
                         </div>
-
-                        {/* Orientation */}
-                        <div>
-                          <h5 className="text-sm font-medium text-gray-600 mb-3">Page Orientation</h5>
-                          <div className="bg-base-100 p-3 rounded-xl border border-base-200">
-                            <div className="flex gap-6">
-                              <label className="flex items-center gap-2 cursor-pointer">
-                                <input 
-                                  type="radio" 
-                                  name="orientation" 
-                                  className="radio radio-sm radio-primary" 
-                                  checked={orientation === "portrait"}
-                                  onChange={() => setOrientation("portrait")}
-                                />
-                                <span className="text-sm">Portrait</span>
-                              </label>
-                              <label className="flex items-center gap-2 cursor-pointer">
-                                <input 
-                                  type="radio" 
-                                  name="orientation" 
-                                  className="radio radio-sm"
-                                  checked={orientation === "landscape"}
-                                  onChange={() => setOrientation("landscape")}
-                                />
-                                <span className="text-sm">Landscape</span>
-                              </label>
-                            </div>
-                          </div>
-              </div>
-            </div>
+                      </div>
 
                       {/* Color Analysis Section */}
                       <div className="mb-8">
