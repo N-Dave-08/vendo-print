@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { getDatabase, ref as dbRef, get, set, onValue, push } from "firebase/database";
 import M_Password from '../components/M_Password';
+import MonthlyStats from '../components/admin/MonthlyStats';
 
 const Admin = () => {
   const [showModal, setShowModal] = useState(true);
@@ -163,6 +164,9 @@ const Admin = () => {
             </div>
           </div>
         </div>
+
+        {/* Monthly Statistics */}
+        <MonthlyStats />
 
         {/* Sales Summary */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
