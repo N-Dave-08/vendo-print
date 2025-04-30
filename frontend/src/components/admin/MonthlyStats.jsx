@@ -1,15 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { getDatabase, ref as dbRef, onValue } from "firebase/database";
 import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
   Tooltip,
   Legend,
-  ResponsiveContainer
-} from 'recharts';
+} from 'chart.js';
+import { Bar } from 'react-chartjs-2';
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
+  Tooltip,
+  Legend
+);
 
 const MonthlyStats = () => {
   const [monthlyData, setMonthlyData] = useState([]);
@@ -165,6 +174,54 @@ const MonthlyStats = () => {
     qrPrints: 0
   };
 
+  // Prepare data for Chart.js
+  const chartData = {
+    labels: monthlyData.map(d => d.displayMonth),
+    datasets: [
+      {
+        label: 'Xerox',
+        data: monthlyData.map(d => d.xeroxPrints),
+        backgroundColor: '#3b82f6',
+      },
+      {
+        label: 'USB',
+        data: monthlyData.map(d => d.usbPrints),
+        backgroundColor: '#10b981',
+      },
+      {
+        label: 'QR',
+        data: monthlyData.map(d => d.qrPrints),
+        backgroundColor: '#f59e0b',
+      },
+    ],
+  };
+
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'top',
+      },
+      title: {
+        display: false,
+      },
+    },
+    scales: {
+      x: {
+        grid: {
+          display: false,
+        },
+      },
+      y: {
+        grid: {
+          display: true,
+          drawBorder: false,
+        },
+      },
+    },
+  };
+
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold mb-4">
@@ -200,26 +257,7 @@ const MonthlyStats = () => {
       <div className="bg-base-100 shadow-xl rounded-lg p-4">
         <h3 className="text-lg font-semibold mb-4">Monthly Print Distribution</h3>
         <div className="h-[400px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={monthlyData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis 
-                dataKey="displayMonth"
-                interval={0}
-                angle={0}
-                textAnchor="middle"
-              />
-              <YAxis />
-              <Tooltip 
-                formatter={(value, name) => [value, name]}
-                labelFormatter={(label) => `Month: ${label}`}
-              />
-              <Legend />
-              <Bar dataKey="xeroxPrints" fill="#3b82f6" name="Xerox" />
-              <Bar dataKey="usbPrints" fill="#10b981" name="USB" />
-              <Bar dataKey="qrPrints" fill="#f59e0b" name="QR" />
-            </BarChart>
-          </ResponsiveContainer>
+          <Bar data={chartData} options={chartOptions} />
         </div>
       </div>
     </div>

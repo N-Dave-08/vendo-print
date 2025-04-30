@@ -18,7 +18,7 @@
     "@fortawesome/react-fontawesome": "^0.2.2",
     "@mui/material": "^6.4.8",
     "axios": "^1.7.9",
-    "chart.js": "^4.4.7",
+    "chart.js": "^4.4.9",
     "docx": "^9.3.0",
     "docx-preview": "^0.3.4",
     "electron": "^34.2.0",
@@ -44,8 +44,7 @@
     "react-modal": "^3.16.3",
     "react-pdf": "^9.2.1",
     "react-router-dom": "^7.1.4",
-    "react-to-print": "^3.0.5",
-    "recharts": "^2.15.3"
+    "react-to-print": "^3.0.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
