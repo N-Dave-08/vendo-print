@@ -728,46 +728,64 @@ const FileUpload = () => {
     setUploadProgress(0);
 
     try {
-      // For DOCX files, use server-side conversion
+      // For DOCX files, upload directly without conversion
       if (file.name.toLowerCase().endsWith('.docx') || file.name.toLowerCase().endsWith('.doc')) {
-        setConvertingDocx(true);
-
         // Create form data for the file
         const formData = new FormData();
         formData.append('file', file);
 
-        // Use the Docker conversion service via our backend
-        const response = await fetch('http://192.168.1.19:5000/api/docker-convert-docx', {
-          method: 'POST',
-          body: formData,
-        });
+        // Upload to Firebase first
+        const timestamp = Date.now();
+        const uniqueFileName = `${timestamp}_${file.name}`;
+        const fileRef = ref(storage, `uploads/${uniqueFileName}`);
 
-        if (!response.ok) {
-          throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
-        }
+        // Set metadata
+        const metadata = {
+          contentType: file.type,
+          customMetadata: {
+            public: "true",
+            fileName: file.name,
+            originalFormat: "docx"
+          }
+        };
 
-        const data = await response.json();
+        // Upload file to Firebase
+        const uploadTask = uploadBytesResumable(fileRef, file, metadata);
 
-        if (data.pdfUrl) {
-          console.log("Conversion successful, PDF URL:", data.pdfUrl);
-          // Use the converted PDF URL but keep the original DOCX filename
+        uploadTask.on(
+          "state_changed",
+          (snapshot) => {
+            const progress = Math.round(
+              (snapshot.bytesTransferred / snapshot.totalBytes) * 100
+            );
+            setUploadProgress(progress);
+            setUploadStatus("uploading");
+          },
+          (error) => {
+            console.error("Upload error:", error);
+            setUploadStatus("");
+            alert(`Error: ${error.message}`);
+          },
+          async () => {
+            try {
+              const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
           await handleUploadSuccess(
-            data.pdfUrl,                              // PDF URL 
-            file.name.replace(/\.(docx|doc)$/i, '.pdf'), // Converted PDF filename (not displayed)
-            'application/pdf',                        // File type is PDF
-            file.name                                 // Original DOCX filename to display
-          );
-        } else {
-          throw new Error('PDF conversion failed: No URL returned');
+                downloadURL,
+                file.name,
+                file.type,
+                null // Don't convert to PDF yet
+              );
+            } catch (error) {
+              console.error("Error finalizing upload:", error);
+              alert("Error finalizing upload. Please try again.");
         }
-
-        setConvertingDocx(false);
+          }
+        );
         return;
       }
 
       // Handle direct PDF uploads
       if (file.type === "application/pdf") {
-        // Upload directly to Firebase
         await uploadFileToFirebase(file);
         return;
       }

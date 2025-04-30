@@ -67,7 +67,9 @@ const QRUpload = () => {
     totalPages: parseInt(queryParams.get("pages")) || 1,
     hasColorPages: false,
     colorPageCount: 0,
-    colorAnalysis: null
+    colorAnalysis: null,
+    isConverting: false,
+    convertedUrl: null
   });
 
   // QR Code modal state
@@ -376,7 +378,9 @@ const QRUpload = () => {
           totalPages: 1,
           hasColorPages: false,
           colorPageCount: 0,
-          colorAnalysis: null
+          colorAnalysis: null,
+          isConverting: false,
+          convertedUrl: null
         });
       }
     } catch (error) {
@@ -385,115 +389,151 @@ const QRUpload = () => {
     }
   };
 
-  // Handle file selection
-  const handleSelectFile = async (file) => {
-    console.log("Selected file:", file);
-    setIsLoading(true); // Add loading state while analyzing
-
+  // Add function to convert DOCX to PDF
+  const convertDocxToPdf = async (fileUrl, fileName) => {
     try {
-      // Set initial file data
-      const initialFileData = {
-        fileName: file.fileName,
-        fileUrl: file.fileUrl,
-        totalPages: file.totalPages || 1,
-        fileType: getFileType(file),
-        hasColorPages: false,
-        colorPageCount: 0,
-        colorAnalysis: null
-      };
-      setSelectedFile(initialFileData);
+      console.log('Starting DOCX to PDF conversion for:', fileName);
+      
+      const response = await axios.post('http://localhost:5000/api/convert-docx-from-url', 
+        {
+          fileUrl: fileUrl,
+          fileName: fileName
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          timeout: 60000 // 60 second timeout
+        }
+      );
 
-      // Only perform color analysis for PDFs
-      if (file.fileName.toLowerCase().endsWith('.pdf')) {
-        try {
-          // Create an iframe for color analysis
-          const iframe = document.createElement('iframe');
-          iframe.style.display = 'none';
-          document.body.appendChild(iframe);
-          
-          // Set up message listener before loading the iframe
-          const colorAnalysisPromise = new Promise((resolve, reject) => {
-            const timeoutId = setTimeout(() => {
-              reject(new Error('Color analysis timed out'));
-            }, 10000); // 10 second timeout
+      console.log('Conversion response:', response.data);
 
-            window.addEventListener('message', function onMessage(event) {
-              if (event.data.type === 'colorAnalysisComplete') {
-                clearTimeout(timeoutId);
-                window.removeEventListener('message', onMessage);
-                resolve(event.data);
-              }
-            });
-          });
-
-          // Load the proxy page
-          iframe.src = '/proxy-pdf.html';
-          await new Promise(resolve => iframe.onload = resolve);
-
-          // Send the PDF for analysis
-          iframe.contentWindow.postMessage({
-            type: 'analyzePDF',
-            pdfUrl: file.fileUrl,
-            filename: file.fileName
-          }, '*');
-
-          // Wait for analysis results
-          const colorAnalysisResult = await colorAnalysisPromise;
-          console.log('Color analysis results:', colorAnalysisResult);
-
-          // Update file data with color analysis
-          setSelectedFile(prev => ({
-            ...prev,
-            hasColorPages: colorAnalysisResult.results.hasColoredPages,
-            colorPageCount: colorAnalysisResult.results.coloredPageCount,
-            colorAnalysis: colorAnalysisResult.results
-          }));
-
-          // If there are colored pages, automatically set isColor to true
-          if (colorAnalysisResult.results.hasColoredPages) {
-            setIsColor(true);
-          }
-
-          // Clean up iframe
-          document.body.removeChild(iframe);
-        } catch (analysisError) {
-          console.error('Color analysis failed:', analysisError);
-          // Continue with basic file data if color analysis fails
+      if (response.data && response.data.status === 'success') {
+        if (response.data.pdfUrl) {
+          return response.data.pdfUrl;
+        }
+        // If conversion is in progress, return null
+        if (response.data.inProgress) {
+          return null;
         }
       }
+      
+      // For any other response, throw an error to trigger retry
+      throw new Error(response.data.message || 'Unexpected conversion response');
     } catch (error) {
-      console.error("Error handling file selection:", error);
-    } finally {
-      setIsLoading(false);
+      // Let the error propagate to be handled by the caller
+      throw error;
     }
   };
 
-  // Helper function to determine file type
-  const getFileType = (file) => {
-    if (file.originalType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" &&
-        file.fileType === "application/pdf") {
-      return "application/pdf";
+  // Modify the file selection handler
+  const handleFileSelect = async (file) => {
+    // Immediately update selected file
+    setSelectedFile({
+      ...file,
+      isConverting: false,
+      convertedUrl: null
+    });
+
+    // If it's a DOCX file and hasn't been converted yet, start conversion in the background
+    if ((file.fileName.toLowerCase().endsWith('.docx') || file.fileName.toLowerCase().endsWith('.doc')) && !file.convertedUrl) {
+      // Use setTimeout to handle conversion after selection is complete
+      setTimeout(async () => {
+        setSelectedFile(prev => ({ ...prev, isConverting: true }));
+        
+        try {
+          // Get a fresh URL if needed
+          let currentFileUrl = file.fileUrl;
+          try {
+            currentFileUrl = await fallbackToDbRefresh(file);
+            console.log('Using refreshed URL:', currentFileUrl);
+          } catch (urlError) {
+            console.log('Using original URL');
+            // Continue with original URL if refresh fails
+          }
+
+          const pdfUrl = await convertDocxToPdf(currentFileUrl, file.fileName);
+          
+          // Only update if we got a valid PDF URL
+          if (pdfUrl) {
+            console.log('Received converted PDF URL:', pdfUrl);
+            
+            // Update the file in the database with the converted URL
+            if (file.id) {
+              const fileRef = dbRef(realtimeDb, `uploadedFiles/${file.id}`);
+              await update(fileRef, {
+                convertedUrl: pdfUrl,
+                lastConverted: Date.now()
+              });
+            }
+
+            setSelectedFile(prev => ({
+              ...prev,
+              isConverting: false,
+              convertedUrl: pdfUrl
+            }));
+          }
+        } catch (error) {
+          // Check if it's a "conversion in progress" response
+          if (error.response?.status === 409 || 
+              (error.message && error.message.includes('Conversion in progress'))) {
+            console.log('Conversion in progress, updating status');
+            setSelectedFile(prev => ({
+              ...prev,
+              isConverting: true
+            }));
+          } else {
+            console.error('Error converting file:', error);
+            setSelectedFile(prev => ({
+              ...prev,
+              isConverting: false
+            }));
+          }
+        }
+      }, 0);
     }
-    
-    const extension = file.fileName.toLowerCase().split('.').pop();
-    switch (extension) {
-      case 'pdf':
-        return "application/pdf";
-      case 'doc':
-      case 'docx':
-        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-      case 'jpg':
-      case 'jpeg':
-        return "image/jpeg";
-      case 'png':
-        return "image/png";
-      case 'gif':
-        return "image/gif";
-      case 'webp':
-        return "image/webp";
-      default:
-        return "application/octet-stream";
-    }
+  };
+
+  // Update the file display component to show conversion status
+  const FileItem = ({ file, onSelect, selected }) => {
+    return (
+      <div
+        className={`relative flex items-center p-4 hover:bg-base-200 cursor-pointer ${
+          selected ? 'bg-base-200' : ''
+        }`}
+      >
+        <div 
+          className="flex items-center flex-1 min-w-0 mr-2"
+          onClick={() => onSelect(file)}
+        >
+          <div className="flex-shrink-0 mr-4">
+            {getFileIcon(file.fileName)}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-base-content truncate">
+              {file.fileName}
+            </p>
+            {file.isConverting && (
+              <div className="flex items-center text-sm text-base-content/70">
+                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                Converting to PDF...
+              </div>
+            )}
+          </div>
+        </div>
+        <button
+          className="btn btn-ghost btn-sm text-error flex-shrink-0"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleDeleteFile(file.id, file.fileUrl);
+          }}
+          title="Delete file"
+        >
+          <FaTrashAlt className="w-4 h-4" />
+        </button>
+      </div>
+    );
   };
 
   // Print dialog handlers
@@ -860,42 +900,15 @@ const QRUpload = () => {
                 ) : (
                   <div className="space-y-2 overflow-y-auto">
                     {uploadedFiles.map((file) => (
-                      <div
+                      <FileItem
                         key={file.id}
-                        className={`card hover:shadow-md transition-shadow cursor-pointer ${
-                          selectedFile.fileName === file.fileName
-                            ? "bg-primary/5 border-2 border-primary"
-                            : "bg-base-100 border border-base-200"
-                        }`}
-                        onClick={() => handleSelectFile(file)}
-                      >
-                        <div className="card-body p-3">
-                          <div className="flex items-center gap-3">
-                                {getFileIcon(file.fileName)}
-                            <div className="flex-1 min-w-0">
-                              <h3 className="font-medium text-sm truncate mb-1">
-                                {file.fileName}
-                              </h3>
-                              <div className="flex items-center gap-2 text-xs text-base-content/60">
-                                <span>{new Date(file.uploadedAt).toLocaleDateString()}</span>
-                </div>
-              </div>
-                            <button
-                              className="btn btn-ghost btn-sm btn-circle self-start"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeleteFile(file.id, file.fileUrl);
-                              }}
-                              aria-label="Delete file"
-                            >
-                              <IoClose className="w-4 h-4 opacity-50 hover:opacity-100" />
-                            </button>
-            </div>
-          </div>
-                      </div>
+                        file={file}
+                        onSelect={handleFileSelect}
+                        selected={selectedFile.fileName === file.fileName}
+                      />
                     ))}
-        </div>
-      )}
+                  </div>
+                )}
               </div>
             </div>
           </div>

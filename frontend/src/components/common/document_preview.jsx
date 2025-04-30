@@ -4,6 +4,7 @@ import { getStorage, ref, getBlob, uploadBytes, getDownloadURL } from "firebase/
 import { storage } from "../../../firebase/firebase_config";
 import mammoth from "mammoth";
 import { PDFDocument, StandardFonts } from "pdf-lib";
+import axios from "axios";
 
 const DocumentPreview = ({ 
   fileUrl, 
@@ -20,6 +21,10 @@ const DocumentPreview = ({
   const [blobUrl, setBlobUrl] = useState(null);
   const [docxHtml, setDocxHtml] = useState(null);
   const [pdfUrl, setPdfUrl] = useState(null);
+  const [conversionStatus, setConversionStatus] = useState('');
+  const [convertingDocx, setConvertingDocx] = useState(false);
+  const [showErrorDialog, setShowErrorDialog] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
   
   // Use url as fallback if fileUrl is not provided
   const documentUrl = fileUrl || url;
@@ -346,6 +351,141 @@ const DocumentPreview = ({
     }
   };
 
+  // Modify the convertWithLibreOffice function to handle status updates
+  const convertWithLibreOffice = async (docxUrl, docxFileName) => {
+    let retryCount = 0;
+    const maxRetries = 5;
+    
+    while (retryCount < maxRetries) {
+      try {
+        console.log("Converting DOCX to PDF using LibreOffice...");
+        setConvertingDocx(true);
+        setConversionStatus('Converting document...');
+
+        const response = await axios.post('http://localhost:5000/api/convert-docx-from-url', {
+          fileUrl: docxUrl,
+          fileName: docxFileName
+        });
+
+        // Handle successful conversion
+        if (response.data.status === 'success') {
+          if (response.data.pdfUrl) {
+            console.log("LibreOffice conversion successful");
+            setConvertingDocx(false);
+            setConversionStatus('Conversion successful');
+            return response.data.pdfUrl;
+          }
+          
+          // If conversion is in progress, wait and retry
+          if (response.data.inProgress) {
+            console.log("Conversion in progress, waiting...");
+            setConversionStatus('Converting document...');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            retryCount++;
+            continue;
+          }
+        }
+      } catch (error) {
+        console.log("Conversion attempt failed, retrying...");
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        retryCount++;
+        
+        if (retryCount === maxRetries) {
+          console.log("Max retries reached, continuing without conversion");
+          setConvertingDocx(false);
+          setConversionStatus('');
+          return null;
+        }
+        continue;
+      }
+    }
+    
+    setConvertingDocx(false);
+    setConversionStatus('');
+    return null;
+  };
+
+  // Modify the processDocxFile function to handle conversion status better
+  const processDocxFile = async () => {
+    try {
+      if (['doc', 'docx'].includes(fileExtension)) {
+        // First try to get the original DOCX URL
+        const originalDocxUrl = await checkForOriginalDocx(documentUrl);
+        const docxUrl = originalDocxUrl || documentUrl;
+
+        if (docxUrl) {
+          try {
+            // Try server-side LibreOffice conversion first
+            const pdfUrl = await convertWithLibreOffice(docxUrl, fileName);
+            if (pdfUrl) {
+              console.log("Using LibreOffice converted PDF");
+              setPdfUrl(pdfUrl);
+              setLoading(false);
+              return true;
+            }
+          } catch (libreOfficeError) {
+            // Only log and fall back for non-409 errors
+            if (!libreOfficeError.response || libreOfficeError.response.status !== 409) {
+              console.error("LibreOffice conversion failed:", libreOfficeError);
+              // If LibreOffice fails, fall back to Office Online Viewer
+              console.log("Falling back to Office Online Viewer");
+              const encodedFileUrl = encodeURIComponent(docxUrl);
+              const officeViewerUrl = `https://view.officeapps.live.com/op/embed.aspx?src=${encodedFileUrl}`;
+              setBlobUrl(officeViewerUrl);
+              setLoading(false);
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    } catch (error) {
+      console.error("Error in DOCX processing:", error);
+      return false;
+    }
+  };
+
+  // Modify the handleLocalFile function to use LibreOffice conversion
+  const handleLocalFile = async () => {
+    try {
+      console.log("Using local file directly:", fileToUpload.name);
+
+      // If it's a DOCX file, process it
+      if (['doc', 'docx'].includes(fileExtension)) {
+        try {
+          // First upload the file to get a URL
+          const fileRef = ref(storage, `uploads/${Date.now()}_${fileToUpload.name}`);
+          await uploadBytes(fileRef, fileToUpload);
+          const docxUrl = await getDownloadURL(fileRef);
+
+          // Convert using LibreOffice
+          const pdfUrl = await convertWithLibreOffice(docxUrl, fileToUpload.name);
+          if (pdfUrl) {
+            setPdfUrl(pdfUrl);
+            setLoading(false);
+            return;
+          }
+
+          throw new Error('PDF conversion failed');
+        } catch (error) {
+          console.error("Failed to process DOCX file:", error);
+          setViewerError(true);
+          setLoading(false);
+        }
+        return;
+      }
+
+      // For other file types, create an object URL
+      const url = URL.createObjectURL(fileToUpload);
+      setBlobUrl(url);
+      setLoading(false);
+    } catch (error) {
+      console.error("Error creating URL from local file:", error);
+      setViewerError(true);
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     // Reset state
     setLoading(true);
@@ -376,220 +516,11 @@ const DocumentPreview = ({
     }
     
     // Special handling for DOCX files to prioritize the Office Online Viewer
-    const processDocxFile = async () => {
-      try {
-        if (['doc', 'docx'].includes(fileExtension)) {
-          // Check if we have an original DOCX URL available
-          const originalDocxUrl = await checkForOriginalDocx(documentUrl);
-
-          if (originalDocxUrl) {
-            console.log("Using original DOCX with Office Online Viewer:", originalDocxUrl);
-            const encodedFileUrl = encodeURIComponent(originalDocxUrl);
-            const officeViewerUrl = `https://view.officeapps.live.com/op/embed.aspx?src=${encodedFileUrl}`;
-            setBlobUrl(officeViewerUrl);
-            setLoading(false);
-            return true;
-          }
-        }
-        return false;
-      } catch (error) {
-        console.error("Error in DOCX processing:", error);
-        return false;
-      }
-    };
-
-    // Convert DOCX content to PDF
-    const convertDocxToPdf = async (docxArrayBuffer, docxFileName) => {
-      try {
-        console.log("Converting DOCX to PDF for preview");
-
-        // Try enhanced HTML-based conversion first
-        try {
-          const pdfUrl = await displayDocxWithFormatting(docxArrayBuffer);
-          if (pdfUrl) {
-            return pdfUrl;
-          }
-        } catch (enhancedError) {
-          console.log("Enhanced conversion failed, trying fallback options", enhancedError);
-        }
-
-        // If enhanced conversion fails, try direct text-to-PDF
-        try {
-          // Extract text
-          const textResult = await mammoth.extractRawText({ arrayBuffer: docxArrayBuffer });
-          const textContent = textResult.value;
-
-          // Create PDF document
-          const pdfDoc = await PDFDocument.create();
-
-          // Standard letter size
-          const pageWidth = 612;
-          const pageHeight = 792;
-
-          // Margins (72 points = 1 inch)
-          const margin = 72;
-
-          // Font settings
-          const fontSize = 12;
-          const lineHeight = fontSize * 1.5;
-
-          // Embed a standard font
-          const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-
-          // Split into paragraphs
-          const paragraphs = textContent.split('\n\n');
-          let pageCount = 0;
-          let currentPage = null;
-          let yPosition = 0;
-
-          // Process paragraphs
-          for (const paragraph of paragraphs) {
-            // Skip empty paragraphs
-            if (!paragraph.trim()) continue;
-
-            // Create first page if needed
-            if (!currentPage) {
-              currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-              pageCount++;
-              yPosition = pageHeight - margin;
-            }
-
-            // Word wrapping and text placement
-            const words = paragraph.split(' ');
-            let currentLine = '';
-
-            for (let i = 0; i < words.length; i++) {
-              const word = words[i];
-              const testLine = currentLine + (currentLine ? ' ' : '') + word;
-              const width = font.widthOfTextAtSize(testLine, fontSize);
-
-              if (width > pageWidth - margin * 2 && i > 0) {
-                // Line is full, draw it
-                currentPage.drawText(currentLine, {
-                  x: margin,
-                  y: yPosition,
-                  size: fontSize,
-                  font: font,
-                });
-
-                // Move to next line
-                yPosition -= lineHeight;
-                currentLine = word;
-
-                // Check if we need a new page
-                if (yPosition < margin) {
-                  currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-                  pageCount++;
-                  yPosition = pageHeight - margin;
-                }
-              } else {
-                currentLine = testLine;
-              }
-            }
-
-            // Draw any remaining text in the line
-            if (currentLine) {
-              currentPage.drawText(currentLine, {
-                x: margin,
-                y: yPosition,
-                size: fontSize,
-                font: font,
-              });
-              yPosition -= lineHeight;
-            }
-
-            // Add paragraph spacing
-            yPosition -= lineHeight / 2;
-
-            // Check if we need a new page
-            if (yPosition < margin) {
-              currentPage = pdfDoc.addPage([pageWidth, pageHeight]);
-              pageCount++;
-              yPosition = pageHeight - margin;
-            }
-          }
-
-          // Save the PDF
-          const pdfBytes = await pdfDoc.save();
-
-          // Upload the PDF to Firebase (temporary storage)
-          const pdfFileName = docxFileName.replace(/\.(docx|doc)$/i, '.pdf');
-          const pdfRef = ref(storage, `temp/${Date.now()}_${pdfFileName}`);
-
-          // Create a blob from the PDF bytes
-          const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
-
-          // Upload the blob
-          await uploadBytes(pdfRef, pdfBlob);
-
-          // Get download URL
-          const pdfDownloadUrl = await getDownloadURL(pdfRef);
-          console.log("Text-based PDF conversion completed with", pageCount, "pages");
-
-          // Return the PDF URL
-          return pdfDownloadUrl;
-        } catch (directPdfError) {
-          console.log("Direct text-to-PDF conversion failed, trying fallback method:", directPdfError);
-        }
-
-        // Fallback to simpler conversion if the direct method fails
-        console.log("Using fallback PDF conversion method");
-
-        // Use a simple HTML preview instead
-        return await displayDocxWithFormatting(docxArrayBuffer, true);
-      } catch (error) {
-        console.error("Error converting DOCX to PDF:", error);
-        return null;
-      }
-    };
-
-    // Handle DOCX and other file types
     processDocxFile().then(handled => {
       if (handled) return;
 
       // If we have a local file, use it directly
       if (fileToUpload) {
-        // Handle local files
-        const handleLocalFile = async () => {
-          try {
-            console.log("Using local file directly:", fileToUpload.name);
-
-            // If it's a DOCX file, process it
-            if (['doc', 'docx'].includes(fileExtension)) {
-              try {
-                const arrayBuffer = await fileToUpload.arrayBuffer();
-
-                // Try to convert DOCX to PDF first
-                const pdfUrl = await convertDocxToPdf(arrayBuffer, fileToUpload.name);
-                if (pdfUrl) {
-                  setPdfUrl(pdfUrl);
-                  setLoading(false);
-                  return;
-                }
-
-                // Fallback to HTML preview if PDF conversion fails
-                const result = await mammoth.convertToHtml({ arrayBuffer });
-                setDocxHtml(result.value);
-                setLoading(false);
-              } catch (error) {
-                console.error("Failed to process DOCX file:", error);
-                setViewerError(true);
-                setLoading(false);
-              }
-              return;
-            }
-
-            // For other file types, create an object URL
-            const url = URL.createObjectURL(fileToUpload);
-            setBlobUrl(url);
-            setLoading(false);
-          } catch (error) {
-            console.error("Error creating URL from local file:", error);
-            setViewerError(true);
-            setLoading(false);
-          }
-        };
-
         handleLocalFile();
         return;
       }
@@ -627,7 +558,7 @@ const DocumentPreview = ({
                   const arrayBuffer = await blob.arrayBuffer();
 
                   // Try to convert DOCX to PDF
-                  const pdfUrl = await convertDocxToPdf(arrayBuffer, fileName);
+                  const pdfUrl = await displayDocxWithFormatting(arrayBuffer);
                   if (pdfUrl) {
                     setPdfUrl(pdfUrl);
                     setLoading(false);
@@ -687,14 +618,25 @@ const DocumentPreview = ({
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
-          <Loader className="w-8 h-8 animate-spin mx-auto mb-2 text-primary" />
-          <p>Loading document preview...</p>
+          <Loader className="w-8 h-8 animate-spin mx-auto mb-4" />
+          <p className="text-sm text-gray-600">{conversionStatus || 'Loading...'}</p>
         </div>
       </div>
     );
   }
 
   const renderPreview = () => {
+    if (loading) {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <div className="text-center">
+            <Loader className="w-8 h-8 animate-spin mx-auto mb-4" />
+            <p className="text-sm text-gray-600">{conversionStatus || 'Loading...'}</p>
+          </div>
+        </div>
+      );
+    }
+
     // For DOCX files converted to PDF or direct PDF files
     if ((fileExtension === 'pdf' || ['doc', 'docx'].includes(fileExtension)) && pdfUrl) {
       // Add event handlers for iframe loading
@@ -902,8 +844,32 @@ const DocumentPreview = ({
     );
   }
 
+  // Add error dialog component to the render
+  const renderErrorDialog = () => {
+    if (!showErrorDialog) return null;
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="bg-white rounded-lg p-6 max-w-md">
+          <h3 className="text-lg font-semibold mb-4">Conversion Error</h3>
+          <p className="text-gray-600 mb-4">{errorMessage}</p>
+          <div className="flex justify-end">
+            <button
+              onClick={() => setShowErrorDialog(false)}
+              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Update the return statement to include the error dialog
   return (
     <div className="w-full h-full bg-gray-50 overflow-hidden">
+      {renderErrorDialog()}
       {!documentUrl && (
         <div className="flex flex-col items-center justify-center h-full">
           <p className="text-gray-500">Uploading...</p>

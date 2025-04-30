@@ -698,22 +698,18 @@ const Usb = () => {
         setPrintStatus("Converting DOCX to PDF...");
 
         try {
-          // Send the file path to the backend for conversion
-          const response = await axios.post('http://localhost:5000/api/convert-docx', 
-            { filePath: file.path }, 
-            {
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              timeout: 120000 // 2 minutes timeout
-            }
-          );
+          // Send the file path directly to the backend for conversion
+          const response = await axios.post('http://localhost:5000/api/convert-docx-direct', {
+            filePath: file.path
+          }, {
+            timeout: 120000 // 2 minutes timeout
+          });
 
-          if (!response.data || response.data.status === 'error') {
-            throw new Error(response.data?.message || 'Server error during conversion');
+          if (response.data.status === 'error') {
+            throw new Error(response.data.message || 'Server error during conversion');
           }
 
-          // Get the converted PDF from Firebase Storage URL
+          // Get the converted PDF URL
           const pdfUrl = response.data.pdfUrl;
           if (!pdfUrl) {
             throw new Error('No PDF URL received from server');
@@ -737,96 +733,51 @@ const Usb = () => {
           // Set the file for preview
           setFileToUpload(pdfFile);
           setTotalPages(pageCount);
+          setFilePreviewUrl(pdfUrl);
 
-          // Create a unique filename for storage
-          const timestamp = new Date().getTime();
-          const uniqueFileName = `${timestamp}_${pdfFile.name}`;
-          const storageRef = ref(storage, `uploads/${uniqueFileName}`);
+          // Create an iframe for color analysis
+          const iframe = document.createElement('iframe');
+          iframe.style.display = 'none';
+          iframe.src = '/proxy-pdf.html';
+          document.body.appendChild(iframe);
 
-          // Upload the converted PDF to Firebase Storage
-          setPrintStatus("Uploading converted PDF...");
-          setPrintProgress(70);
-
-          const uploadTask = uploadBytesResumable(storageRef, pdfFile, {
-            contentType: 'application/pdf',
-            customMetadata: {
-              originalName: file.name,
-              convertedFrom: 'docx'
-            }
+          // Wait for iframe to load
+          await new Promise((resolve) => {
+            iframe.onload = resolve;
           });
 
-          // Listen for upload task completion
-          uploadTask.on(
-            "state_changed",
-            (snapshot) => {
-              const progress = Math.round(
-                (snapshot.bytesTransferred / snapshot.totalBytes) * 100
-              );
-              setPrintProgress(70 + (progress * 0.3)); // Scale from 70-100%
-              setPrintStatus(`Uploading: ${progress}%`);
-            },
-            (error) => {
-              console.error("Upload error:", error);
-              setIsLoading(false);
-              setPrintStatus("Error uploading file. Please try again.");
-              setPrintProgress(0);
-            },
-            async () => {
-              try {
-                const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-                console.log("File uploaded, URL:", downloadURL);
-                setFilePreviewUrl(downloadURL);
+          // Send message to iframe with PDF URL
+          iframe.contentWindow.postMessage({
+            type: 'analyzePDF',
+            pdfUrl: pdfUrl,
+            filename: pdfFile.name
+          }, '*');
 
-                // Create an iframe for color analysis
-                const iframe = document.createElement('iframe');
-                iframe.style.display = 'none';
-                iframe.src = '/proxy-pdf.html';
-                document.body.appendChild(iframe);
-
-                // Wait for iframe to load
-                await new Promise((resolve) => {
-                  iframe.onload = resolve;
-                });
-
-                // Send message to iframe with PDF URL
-                iframe.contentWindow.postMessage({
-                  type: 'analyzePDF',
-                  pdfUrl: downloadURL,
-                  filename: pdfFile.name
-                }, '*');
-
-                // Listen for color analysis results
-                const colorAnalysisResult = await new Promise((resolve) => {
-                  window.addEventListener('message', function onMessage(event) {
-                    if (event.data.type === 'colorAnalysisComplete') {
-                      window.removeEventListener('message', onMessage);
-                      document.body.removeChild(iframe);
-                      resolve(event.data);
-                    }
-                  });
-                });
-
-                console.log('Color analysis results:', colorAnalysisResult);
-
-                // Set the color analysis results
-                setColorAnalysis(colorAnalysisResult.results);
-
-                // If there are colored pages, automatically set isColor to true
-                if (colorAnalysisResult.results.hasColoredPages) {
-                  setIsColor(true);
-                }
-
-                setIsLoading(false);
-                setPrintStatus("Ready to print");
-                setPrintProgress(100);
-              } catch (error) {
-                console.error("Error getting download URL or analyzing colors:", error);
-                setIsLoading(false);
-                setPrintStatus("Error preparing file. Please try again.");
-                setPrintProgress(0);
+          // Listen for color analysis results
+          const colorAnalysisResult = await new Promise((resolve) => {
+            window.addEventListener('message', function onMessage(event) {
+              if (event.data.type === 'colorAnalysisComplete') {
+                window.removeEventListener('message', onMessage);
+                document.body.removeChild(iframe);
+                resolve(event.data);
               }
-            }
-          );
+            });
+          });
+
+          console.log('Color analysis results:', colorAnalysisResult);
+
+          // Set the color analysis results
+          setColorAnalysis(colorAnalysisResult.results);
+
+          // If there are colored pages, automatically set isColor to true
+          if (colorAnalysisResult.results.hasColoredPages) {
+            setIsColor(true);
+          }
+
+          setIsLoading(false);
+          setPrintStatus("Ready to print");
+          setPrintProgress(100);
+
         } catch (error) {
           console.error("Error converting DOCX:", error);
           setIsLoading(false);
@@ -1423,16 +1374,6 @@ const Usb = () => {
                         useExternalViewer={useExternalViewer}
                         fileName={fileToUpload ? fileToUpload.name : "document.pdf"}
                       />
-                      <div className="p-2 flex justify-center">
-                        <a 
-                          href={filePreviewUrl} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="btn btn-sm btn-primary"
-                        >
-                          Open file in new window
-                        </a>
-                      </div>
                     </div>
                   ) : (
                     <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">

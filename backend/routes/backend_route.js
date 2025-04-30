@@ -22,6 +22,8 @@ import { convertDocxToPdf, cleanupTempFiles, checkLibreOffice } from '../service
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '../firebase/firebase-config.js';
 import axios from 'axios';
+// Import the DOCX conversion routes
+import docxRoutes from './api.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,6 +45,9 @@ const uploadStorage = multer.diskStorage({
 const upload = multer({ storage: uploadStorage });
 
 const BackendRoutes = express.Router();
+
+// Register the DOCX conversion routes
+BackendRoutes.use('/', docxRoutes);
 
 // Add a debounce mechanism to prevent multiple scans
 let lastScanTime = 0;
