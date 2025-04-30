@@ -615,9 +615,11 @@ const FileUpload = () => {
       // Get the backend URL with proper port and error handling
       // Try multiple possible backend URLs
       const possibleBackendUrls = [
+        'http://192.168.1.3:5000/api/convert-docx',
+        `http://${window.location.hostname}:5000/api/convert-docx`,
+        `http://${window.location.hostname}:3000/api/convert-docx`,
         'http://localhost:5000/api/convert-docx',
-        'http://127.0.0.1:5000/api/convert-docx',
-        `http://${window.location.hostname}:5000/api/convert-docx`
+        'http://127.0.0.1:5000/api/convert-docx'
       ];
 
       let response = null;
@@ -728,18 +730,13 @@ const FileUpload = () => {
     setUploadProgress(0);
 
     try {
-      // For DOCX files, upload directly without conversion
+      // For DOCX files, upload directly first, then convert
       if (file.name.toLowerCase().endsWith('.docx') || file.name.toLowerCase().endsWith('.doc')) {
-        // Create form data for the file
-        const formData = new FormData();
-        formData.append('file', file);
-
         // Upload to Firebase first
         const timestamp = Date.now();
         const uniqueFileName = `${timestamp}_${file.name}`;
         const fileRef = ref(storage, `uploads/${uniqueFileName}`);
 
-        // Set metadata
         const metadata = {
           contentType: file.type,
           customMetadata: {
@@ -749,7 +746,7 @@ const FileUpload = () => {
           }
         };
 
-        // Upload file to Firebase
+        // Upload file
         const uploadTask = uploadBytesResumable(fileRef, file, metadata);
 
         uploadTask.on(
@@ -769,12 +766,33 @@ const FileUpload = () => {
           async () => {
             try {
               const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-          await handleUploadSuccess(
-                downloadURL,
-                file.name,
-                file.type,
-                null // Don't convert to PDF yet
-              );
+
+              // Create file entry in Firebase with DOCX info
+              const newFileRef = push(dbRef(realtimeDb, "uploadedFiles"));
+              await set(newFileRef, {
+                fileName: file.name,
+                fileUrl: downloadURL,
+                uploadedAt: new Date().toISOString(),
+                fileType: file.type,
+                uploadSource: "qr",
+                status: "pending_conversion",
+                originalFormat: "docx",
+                isConverted: false
+              });
+
+              setUploadStatus("");
+              setSuccessMessage(`${file.name} uploaded successfully! Converting to PDF...`);
+              setShowSuccess(true);
+              
+              // Clear form after successful upload
+              setTimeout(() => {
+                setShowSuccess(false);
+                setSuccessMessage("");
+                setFileToUpload(null);
+                setFilePreviewUrl("");
+                setUploadProgress(0);
+              }, 3000);
+
             } catch (error) {
               console.error("Error finalizing upload:", error);
               alert("Error finalizing upload. Please try again.");
@@ -784,15 +802,139 @@ const FileUpload = () => {
         return;
       }
 
-      // Handle direct PDF uploads
+      // Handle direct PDF uploads with analysis
       if (file.type === "application/pdf") {
-        await uploadFileToFirebase(file);
+        try {
+          // Get actual page count
+          const pdfData = await file.arrayBuffer();
+          const { pdfBytes, pageCount } = await truncatePdfToTenPages(pdfData);
+          setTotalPages(pageCount);
+
+          // Create a new File object with the truncated PDF if it was modified
+          const fileToUpload = pageCount !== file.size ? 
+            new File([pdfBytes], file.name, { type: 'application/pdf' }) : file;
+
+          // Upload to Firebase first to get URL
+        const timestamp = Date.now();
+          const uniqueFileName = `${timestamp}_${fileToUpload.name}`;
+        const fileRef = ref(storage, `uploads/${uniqueFileName}`);
+
+        const metadata = {
+            contentType: fileToUpload.type,
+          customMetadata: {
+            public: "true",
+              pageCount: pageCount.toString(),
+              fileName: fileToUpload.name
+          }
+        };
+
+          // Upload file
+          const uploadTask = uploadBytesResumable(fileRef, fileToUpload, metadata);
+
+        uploadTask.on(
+          "state_changed",
+          (snapshot) => {
+            const progress = Math.round(
+              (snapshot.bytesTransferred / snapshot.totalBytes) * 100
+            );
+            setUploadProgress(progress);
+            setUploadStatus("uploading");
+          },
+          (error) => {
+            console.error("Upload error:", error);
+            setUploadStatus("");
+            alert(`Error: ${error.message}`);
+          },
+          async () => {
+            try {
+              const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+
+                // Create iframe for PDF analysis
+                const iframe = document.createElement('iframe');
+                iframe.style.display = 'none';
+                iframe.src = '/proxy-pdf.html';
+                document.body.appendChild(iframe);
+
+                // Wait for iframe to load and be ready
+                await new Promise((resolve) => {
+                  iframe.onload = () => {
+                    const checkReady = (event) => {
+                      if (event.data.type === 'proxyReady') {
+                        window.removeEventListener('message', checkReady);
+                        resolve();
+                      }
+                    };
+                    window.addEventListener('message', checkReady);
+                  };
+                });
+
+                // Analyze the PDF
+                const colorAnalysisResult = await new Promise((resolve) => {
+                  const handleAnalysisComplete = (event) => {
+                    if (event.data.type === 'colorAnalysisComplete') {
+                      window.removeEventListener('message', handleAnalysisComplete);
+                      resolve(event.data);
+                      document.body.removeChild(iframe);
+                    }
+                  };
+                  window.addEventListener('message', handleAnalysisComplete);
+                  iframe.contentWindow.postMessage({
+                    type: 'analyzePDF',
+                    pdfUrl: downloadURL,
+                    filename: file.name
+                  }, '*');
+                });
+
+                // Create color analysis data
+                const colorAnalysis = colorAnalysisResult.results && !colorAnalysisResult.results.error ? {
+                  hasColoredPages: colorAnalysisResult.results.hasColoredPages,
+                  coloredPageCount: colorAnalysisResult.results.coloredPageCount,
+                  blackAndWhitePageCount: colorAnalysisResult.results.pageCount - colorAnalysisResult.results.coloredPageCount,
+                  pageAnalysis: colorAnalysisResult.results.pageAnalysis
+                } : null;
+
+                // Create file entry in Firebase with analysis results
+                const newFileRef = push(dbRef(realtimeDb, "uploadedFiles"));
+                await set(newFileRef, {
+                  fileName: file.name,
+                  fileUrl: downloadURL,
+                  uploadedAt: new Date().toISOString(),
+                  fileType: file.type,
+                  totalPages: pageCount,
+                  uploadSource: "qr",
+                  status: "ready",
+                  colorAnalysis: colorAnalysis
+                });
+
+                setUploadStatus("");
+                setSuccessMessage(`${file.name} uploaded and analyzed successfully!`);
+                setShowSuccess(true);
+                
+                // Clear form after successful upload
+                setTimeout(() => {
+                  setShowSuccess(false);
+                  setSuccessMessage("");
+                  setFileToUpload(null);
+                  setFilePreviewUrl("");
+                  setUploadProgress(0);
+                }, 3000);
+            } catch (error) {
+              console.error("Error finalizing upload:", error);
+              alert("Error finalizing upload. Please try again.");
+        }
+          }
+        );
+        } catch (error) {
+          console.error("Error processing PDF:", error);
+          setUploadStatus("");
+          alert(`Error: ${error.message}`);
+      }
         return;
       }
 
       // Handle image uploads
       if (file.type.startsWith('image/')) {
-        setTotalPages(1); // Images are just 1 page
+        setTotalPages(1);
         await uploadFileToFirebase(file);
         return;
       }

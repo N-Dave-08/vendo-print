@@ -13,6 +13,7 @@ const DocumentPreview = ({
   fileToUpload,
   className,
   onDocumentLoad,
+  onConversionComplete,
   externalViewerUrl,
   useExternalViewer
 }) => {
@@ -25,6 +26,9 @@ const DocumentPreview = ({
   const [convertingDocx, setConvertingDocx] = useState(false);
   const [showErrorDialog, setShowErrorDialog] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  
+  // Add new state for parent-provided PDF
+  const [parentProvidedPdf, setParentProvidedPdf] = useState(null);
   
   // Use url as fallback if fileUrl is not provided
   const documentUrl = fileUrl || url;
@@ -351,96 +355,118 @@ const DocumentPreview = ({
     }
   };
 
-  // Modify the convertWithLibreOffice function to handle status updates
+  // Modify the convertWithLibreOffice function
   const convertWithLibreOffice = async (docxUrl, docxFileName) => {
-    let retryCount = 0;
-    const maxRetries = 5;
-    
-    while (retryCount < maxRetries) {
-      try {
-        console.log("Converting DOCX to PDF using LibreOffice...");
-        setConvertingDocx(true);
-        setConversionStatus('Converting document...');
+    try {
+      console.log("🔄 Starting LibreOffice conversion for:", docxFileName);
+      setConvertingDocx(true);
+      setConversionStatus('Converting document...');
 
-        const response = await axios.post('http://localhost:5000/api/convert-docx-from-url', {
-          fileUrl: docxUrl,
-          fileName: docxFileName
+      const response = await axios.post('http://localhost:5000/api/convert-docx-from-url', {
+        fileUrl: docxUrl,
+        fileName: docxFileName
+      });
+
+      // Handle successful conversion
+      if (response.data.status === 'success' && response.data.pdfUrl) {
+        console.log("✅ LibreOffice conversion successful");
+        setConvertingDocx(false);
+        setConversionStatus('Starting PDF analysis...');
+
+        // Create iframe for PDF analysis
+        console.log("📊 Setting up PDF analysis");
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = '/proxy-pdf.html';
+        document.body.appendChild(iframe);
+
+        // Wait for iframe to be ready and analyze PDF
+        const analysisResult = await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error('PDF analysis timeout'));
+          }, 30000); // 30 second timeout
+
+          const handleMessage = (event) => {
+            if (event.data.type === 'proxyReady') {
+              console.log("📊 Analysis iframe ready, starting color analysis");
+              
+              // Start color analysis
+              iframe.contentWindow.postMessage({
+                type: 'analyzePDF',
+                pdfUrl: response.data.pdfUrl,
+                filename: docxFileName
+              }, '*');
+            }
+            else if (event.data.type === 'colorAnalysisComplete') {
+              clearTimeout(timeout);
+              window.removeEventListener('message', handleMessage);
+              document.body.removeChild(iframe);
+              resolve(event.data.results);
+            }
+          };
+
+          window.addEventListener('message', handleMessage);
         });
 
-        // Handle successful conversion
-        if (response.data.status === 'success') {
-          if (response.data.pdfUrl) {
-            console.log("LibreOffice conversion successful");
-            setConvertingDocx(false);
-            setConversionStatus('Conversion successful');
-            return response.data.pdfUrl;
-          }
-          
-          // If conversion is in progress, wait and retry
-          if (response.data.inProgress) {
-            console.log("Conversion in progress, waiting...");
-            setConversionStatus('Converting document...');
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            retryCount++;
-            continue;
-          }
-        }
-      } catch (error) {
-        console.log("Conversion attempt failed, retrying...");
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        retryCount++;
+        console.log("✅ PDF analysis complete:", analysisResult);
         
-        if (retryCount === maxRetries) {
-          console.log("Max retries reached, continuing without conversion");
-          setConvertingDocx(false);
-          setConversionStatus('');
-          return null;
+        // Notify parent component
+        if (onConversionComplete) {
+          onConversionComplete({
+            success: true,
+            pdfUrl: response.data.pdfUrl,
+            analysis: analysisResult
+          });
         }
-        continue;
+
+        setPdfUrl(response.data.pdfUrl);
+        setLoading(false);
+        return response.data.pdfUrl;
       }
+      
+      throw new Error('Conversion failed or no PDF URL received');
+    } catch (error) {
+      console.error("❌ Conversion/analysis error:", error);
+      setConvertingDocx(false);
+      setConversionStatus('');
+      if (onConversionComplete) {
+        onConversionComplete({
+          success: false,
+          error: error.message
+        });
+      }
+      return null;
     }
-    
-    setConvertingDocx(false);
-    setConversionStatus('');
-    return null;
   };
 
-  // Modify the processDocxFile function to handle conversion status better
+  // Modify the processDocxFile function
   const processDocxFile = async () => {
+    if (!['doc', 'docx'].includes(fileExtension)) return false;
+    
     try {
-      if (['doc', 'docx'].includes(fileExtension)) {
-        // First try to get the original DOCX URL
-        const originalDocxUrl = await checkForOriginalDocx(documentUrl);
-        const docxUrl = originalDocxUrl || documentUrl;
+      // Get the original DOCX URL
+      const originalDocxUrl = await checkForOriginalDocx(documentUrl);
+      const docxUrl = originalDocxUrl || documentUrl;
 
-        if (docxUrl) {
-          try {
-            // Try server-side LibreOffice conversion first
-            const pdfUrl = await convertWithLibreOffice(docxUrl, fileName);
-            if (pdfUrl) {
-              console.log("Using LibreOffice converted PDF");
-              setPdfUrl(pdfUrl);
-              setLoading(false);
-              return true;
-            }
-          } catch (libreOfficeError) {
-            // Only log and fall back for non-409 errors
-            if (!libreOfficeError.response || libreOfficeError.response.status !== 409) {
-              console.error("LibreOffice conversion failed:", libreOfficeError);
-              // If LibreOffice fails, fall back to Office Online Viewer
-              console.log("Falling back to Office Online Viewer");
-              const encodedFileUrl = encodeURIComponent(docxUrl);
-              const officeViewerUrl = `https://view.officeapps.live.com/op/embed.aspx?src=${encodedFileUrl}`;
-              setBlobUrl(officeViewerUrl);
-              setLoading(false);
-              return true;
-            }
-          }
-        }
+      if (!docxUrl) {
+        console.error("No valid DOCX URL found");
+        return false;
       }
+
+      console.log("🔄 Processing DOCX file:", fileName);
+      
+      // Try server-side LibreOffice conversion
+      const pdfUrl = await convertWithLibreOffice(docxUrl, fileName);
+      if (pdfUrl) {
+        console.log("✅ Using LibreOffice converted PDF:", pdfUrl);
+        setPdfUrl(pdfUrl);
+        setLoading(false);
+        return true;
+      }
+
       return false;
     } catch (error) {
-      console.error("Error in DOCX processing:", error);
+      console.error("❌ Error in DOCX processing:", error);
       return false;
     }
   };
@@ -493,116 +519,68 @@ const DocumentPreview = ({
     setDocxHtml(null);
     setPdfUrl(null);
 
+    console.log("DocumentPreview useEffect - Starting with URL:", documentUrl);
+    
     if (!documentUrl && !fileToUpload) {
       setLoading(false);
       return;
     }
-    
-    // Prioritize PDF handling - if it's a PDF, render it directly
-    if (fileExtension === 'pdf' || (documentUrl && typeof documentUrl === 'string' && documentUrl.toLowerCase().includes('.pdf'))) {
-      console.log("Direct PDF detection - using PDF viewer");
-      // For PDF files, use direct PDF URL
+
+    // Check if the URL is already a PDF (either directly or converted)
+    if (documentUrl && (
+      fileExtension === 'pdf' || 
+      documentUrl.toLowerCase().includes('.pdf') ||
+      documentUrl.toLowerCase().includes('converted_')
+    )) {
+      console.log("Using existing PDF URL:", documentUrl);
       setPdfUrl(documentUrl);
+      setParentProvidedPdf(documentUrl);
       setLoading(false);
       
-      // Notify parent about loaded document
       if (typeof onDocumentLoad === 'function') {
-        // Use timeout to ensure the UI updates first
         setTimeout(() => {
           onDocumentLoad({ status: 'success', numPages: 1 });
         }, 100);
       }
       return;
     }
-    
-    // Special handling for DOCX files to prioritize the Office Online Viewer
-    processDocxFile().then(handled => {
-      if (handled) return;
 
-      // If we have a local file, use it directly
-      if (fileToUpload) {
-        handleLocalFile();
-        return;
-      }
-
-      // For remote files, try direct embedding first
-      if (documentUrl) {
-        if (['doc', 'docx'].includes(fileExtension)) {
-          // For DOCX files, try to convert to PDF
-          const fetchAndProcessDocx = async () => {
-            try {
-              console.log("Attempting to fetch and process DOCX:", documentUrl);
-
-              // Check if the URL ends with .pdf despite having a DOCX extension in the filename
-              // This indicates it might be a converted DOCX file
-              if (typeof documentUrl === 'string' && documentUrl.toLowerCase().includes('.pdf')) {
-                console.log("This appears to be a converted DOCX file, treating as PDF");
-                setPdfUrl(documentUrl);
-                setLoading(false);
-                return;
-              }
-
-              // Try to fetch the file as a blob first
-              try {
-                const actualUrl = typeof documentUrl === 'string' ? documentUrl :
-                  (documentUrl.fileUrl ? documentUrl.fileUrl : '');
-
-                if (!actualUrl) {
-                  throw new Error("Invalid URL");
-                }
-
-                // Simple direct fetch attempt - this might fail due to CORS
-                const response = await fetch(actualUrl, { mode: 'cors' });
-                if (response.ok) {
-                  const blob = await response.blob();
-                  const arrayBuffer = await blob.arrayBuffer();
-
-                  // Try to convert DOCX to PDF
-                  const pdfUrl = await displayDocxWithFormatting(arrayBuffer);
-                  if (pdfUrl) {
-                    setPdfUrl(pdfUrl);
-                    setLoading(false);
-                    return;
-                  }
-                }
-              } catch (fetchError) {
-                console.log("Direct fetch failed, falling back to simple display:", fetchError);
-              }
-
-              // If direct fetch or conversion fails, fall back to a message
-              setDocxHtml('<div class="flex justify-center items-center h-full"><p>DOCX preview is not available. Please use the Open File button below to view the document.</p></div>');
-              setLoading(false);
-            } catch (error) {
-              console.error("Error processing DOCX file:", error);
-              setViewerError(true);
-              setLoading(false);
-            }
-          };
-
-          fetchAndProcessDocx();
-        } else {
-          // For other file types, use direct URL
-          const actualUrl = typeof documentUrl === 'string' ? documentUrl :
-            (documentUrl.fileUrl ? documentUrl.fileUrl : '');
-
-          if (actualUrl) {
-            setBlobUrl(actualUrl);
+    // For DOCX files, check if we already have a converted version
+    if (['doc', 'docx'].includes(fileExtension)) {
+      const processDocx = async () => {
+        try {
+          // If parent has already provided a PDF version, use that
+          if (parentProvidedPdf) {
+            console.log("Using parent-provided PDF:", parentProvidedPdf);
+            setPdfUrl(parentProvidedPdf);
             setLoading(false);
-          } else {
-            setViewerError(true);
-            setLoading(false);
+            return;
           }
-        }
-      }
-    });
 
-    // Cleanup function to revoke blob URL when component unmounts
-    return () => {
-      if (blobUrl && typeof blobUrl === 'string' && typeof documentUrl === 'string' && blobUrl !== documentUrl) {
-        URL.revokeObjectURL(blobUrl);
-      }
-    };
-  }, [documentUrl, fileToUpload, fileExtension, fileName]);
+          // Otherwise, try to convert
+          await processDocxFile();
+        } catch (error) {
+          console.error("Error processing DOCX:", error);
+          setViewerError(true);
+          setLoading(false);
+        }
+      };
+
+      processDocx();
+      return;
+    }
+
+    // For other file types, use direct URL
+    setBlobUrl(documentUrl);
+    setLoading(false);
+  }, [documentUrl, fileToUpload, fileExtension, fileName, parentProvidedPdf]);
+
+  // Update when parent provides converted PDF
+  useEffect(() => {
+    if (documentUrl && documentUrl.toLowerCase().includes('converted_')) {
+      setParentProvidedPdf(documentUrl);
+    }
+  }, [documentUrl]);
 
   if (!documentUrl && !fileToUpload) {
     return (
