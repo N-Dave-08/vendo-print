@@ -36,6 +36,13 @@ app.use('/api', BackendRoutes);
 console.log('Initializing USB detection service...');
 const wss = await initUsbDetectionService(server);
 
+// Log system information
+console.log('System Information:');
+console.log(`- Architecture: ${process.arch}`);
+console.log(`- Platform: ${process.platform}`);
+console.log(`- Node Version: ${process.version}`);
+console.log(`- Process running as 64-bit: ${process.env.PROCESSOR_ARCHITECTURE === 'AMD64'}`);
+
 if (wss) {
   console.log('✅ USB detection service initialized successfully');
 } else {

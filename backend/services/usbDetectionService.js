@@ -117,15 +117,19 @@ function detectWindowsUsbDrives() {
     // Suppress detailed log
     // console.log('Windows USB detection starting...');
     
-    // Try multiple command variants for better reliability
+    // Try multiple command variants for better reliability and compatibility
     const attempts = [
       {
-        name: 'primary method',
-        cmd: 'Get-WmiObject Win32_LogicalDisk | Where-Object { $_.DriveType -eq 2 } | Select-Object -Property DeviceID'
+        name: 'simple method',
+        cmd: 'Get-WmiObject -Class Win32_LogicalDisk -Filter "DriveType=2" | Select-Object DeviceID, VolumeName'
       },
       {
-        name: 'backup method',
-        cmd: 'Get-WmiObject Win32_LogicalDisk | Where-Object { $_.DriveType -eq 2 } | Format-List DeviceID'
+        name: 'alternative method',
+        cmd: 'Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=2" | Select-Object DeviceID, VolumeName'
+      },
+      {
+        name: 'basic method',
+        cmd: 'wmic logicaldisk where drivetype=2 get deviceid, volumename'
       }
     ];
     
