@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 import http from "http";
 // Import the USB detection service
 import { initUsbDetectionService, getConnectedDrives, refreshDriveFiles } from "./services/usbDetectionService.js";
+import axios from "axios";
 
 // For ES module __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
@@ -78,6 +79,42 @@ app.get("/api/usb-drives/:drivePath/refresh", async (req, res) => {
   } catch (error) {
     console.error("❌ Error refreshing USB drive files:", error);
     res.status(500).json({ status: "error", message: "Failed to refresh USB drive files" });
+  }
+});
+
+// Add proxy-pdf endpoint
+app.get("/api/proxy-pdf", async (req, res) => {
+  try {
+    const { url } = req.query;
+    
+    if (!url) {
+      return res.status(400).json({ error: "URL parameter is required" });
+    }
+
+    console.log("Proxying PDF request for:", url);
+
+    const response = await axios({
+      method: 'GET',
+      url: url,
+      responseType: 'stream',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
+    });
+
+    // Forward the content type
+    res.setHeader('Content-Type', response.headers['content-type']);
+    
+    // Enable CORS
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+
+    // Pipe the response
+    response.data.pipe(res);
+  } catch (error) {
+    console.error("Error proxying PDF:", error);
+    res.status(500).json({ error: "Failed to proxy PDF" });
   }
 });
 

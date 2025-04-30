@@ -389,109 +389,126 @@ const QRUpload = () => {
     }
   };
 
-  // Add function to convert DOCX to PDF
-  const convertDocxToPdf = async (fileUrl, fileName) => {
-    try {
-      console.log('Starting DOCX to PDF conversion for:', fileName);
-      
-      const response = await axios.post('http://localhost:5000/api/convert-docx-from-url', 
-        {
-          fileUrl: fileUrl,
-          fileName: fileName
-        },
-        {
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          timeout: 60000 // 60 second timeout
-        }
-      );
+  // Modify the file selection handler
+  const handleFileSelect = async (file) => {
+    console.log("Selected file:", file);
+    
+    // Update selected file immediately with any existing analysis
+    setSelectedFile({
+      ...file,
+      isConverting: file.isConverting || false,
+      convertedUrl: file.convertedUrl || null,
+      totalPages: file.totalPages || 1,
+      hasColorPages: file.hasColorPages || false,
+      colorPageCount: file.colorPageCount || 0,
+      colorAnalysis: file.colorAnalysis || null
+    });
 
-      console.log('Conversion response:', response.data);
+    // If it's a DOCX file that hasn't been converted yet
+    if ((file.fileName.toLowerCase().endsWith('.docx') || file.fileName.toLowerCase().endsWith('.doc')) && 
+        !file.convertedUrl && !file.isConverting) {
+      try {
+        // Update conversion status in Firebase
+        if (file.id) {
+          const fileRef = dbRef(realtimeDb, `uploadedFiles/${file.id}`);
+          await update(fileRef, {
+            isConverting: true,
+            status: "converting"
+          });
+        }
 
-      if (response.data && response.data.status === 'success') {
-        if (response.data.pdfUrl) {
-          return response.data.pdfUrl;
+        // Update local state
+        setSelectedFile(prev => ({ ...prev, isConverting: true }));
+        
+        // Get a fresh URL if needed
+        let currentFileUrl = file.fileUrl;
+        try {
+          currentFileUrl = await fallbackToDbRefresh(file);
+          console.log('Using refreshed URL:', currentFileUrl);
+        } catch (urlError) {
+          console.log('Using original URL');
         }
-        // If conversion is in progress, return null
-        if (response.data.inProgress) {
-          return null;
+
+        // Start conversion
+        console.log('Starting conversion for:', file.fileName);
+        const response = await axios.post('http://localhost:5000/api/convert-docx-from-url', {
+          fileUrl: currentFileUrl,
+          fileName: file.fileName
+        });
+
+        if (response.data.status === 'success' && response.data.pdfUrl) {
+          console.log('Conversion successful, updating Firebase');
+          
+          // Update Firebase with conversion success
+          if (file.id) {
+            const fileRef = dbRef(realtimeDb, `uploadedFiles/${file.id}`);
+            await update(fileRef, {
+              convertedUrl: response.data.pdfUrl,
+              lastConverted: Date.now(),
+              isConverted: true,
+              status: "converted",
+              isConverting: false
+            });
+          }
+
+          // Update local state with converted URL
+          setSelectedFile(prev => ({
+            ...prev,
+            isConverting: false,
+            convertedUrl: response.data.pdfUrl
+          }));
         }
+      } catch (error) {
+        console.error('Error in conversion process:', error);
+        
+        // Update Firebase with error status
+        if (file.id) {
+          const fileRef = dbRef(realtimeDb, `uploadedFiles/${file.id}`);
+          await update(fileRef, {
+            isConverting: false,
+            status: "conversion_failed"
+          });
+        }
+
+        // Update local state
+        setSelectedFile(prev => ({
+          ...prev,
+          isConverting: false
+        }));
       }
-      
-      // For any other response, throw an error to trigger retry
-      throw new Error(response.data.message || 'Unexpected conversion response');
-    } catch (error) {
-      // Let the error propagate to be handled by the caller
-      throw error;
     }
   };
 
-  // Modify the file selection handler
-  const handleFileSelect = async (file) => {
-    // Immediately update selected file
-    setSelectedFile({
-      ...file,
-      isConverting: false,
-      convertedUrl: null
-    });
+  // Add handler for DocumentPreview analysis completion
+  const handleConversionComplete = async (result) => {
+    console.log("Conversion/analysis complete:", result);
+    
+    if (result.success && result.analysis) {
+      // Update Firebase with analysis results
+      if (selectedFile.id) {
+        console.log('Updating analysis results in Firebase');
+        const fileRef = dbRef(realtimeDb, `uploadedFiles/${selectedFile.id}`);
+        await update(fileRef, {
+          hasColorPages: result.analysis.hasColoredPages,
+          colorPageCount: result.analysis.coloredPageCount,
+          totalPages: result.analysis.pageCount,
+          colorAnalysis: {
+            pageAnalysis: result.analysis.pageAnalysis
+          },
+          lastAnalyzed: Date.now()
+        });
+      }
 
-    // If it's a DOCX file and hasn't been converted yet, start conversion in the background
-    if ((file.fileName.toLowerCase().endsWith('.docx') || file.fileName.toLowerCase().endsWith('.doc')) && !file.convertedUrl) {
-      // Use setTimeout to handle conversion after selection is complete
-      setTimeout(async () => {
-        setSelectedFile(prev => ({ ...prev, isConverting: true }));
-        
-        try {
-          // Get a fresh URL if needed
-          let currentFileUrl = file.fileUrl;
-          try {
-            currentFileUrl = await fallbackToDbRefresh(file);
-            console.log('Using refreshed URL:', currentFileUrl);
-          } catch (urlError) {
-            console.log('Using original URL');
-            // Continue with original URL if refresh fails
-          }
-
-          const pdfUrl = await convertDocxToPdf(currentFileUrl, file.fileName);
-          
-          // Only update if we got a valid PDF URL
-          if (pdfUrl) {
-            console.log('Received converted PDF URL:', pdfUrl);
-            
-            // Update the file in the database with the converted URL
-            if (file.id) {
-              const fileRef = dbRef(realtimeDb, `uploadedFiles/${file.id}`);
-              await update(fileRef, {
-                convertedUrl: pdfUrl,
-                lastConverted: Date.now()
-              });
-            }
-
-            setSelectedFile(prev => ({
-              ...prev,
-              isConverting: false,
-              convertedUrl: pdfUrl
-            }));
-          }
-        } catch (error) {
-          // Check if it's a "conversion in progress" response
-          if (error.response?.status === 409 || 
-              (error.message && error.message.includes('Conversion in progress'))) {
-            console.log('Conversion in progress, updating status');
-            setSelectedFile(prev => ({
-              ...prev,
-              isConverting: true
-            }));
-          } else {
-            console.error('Error converting file:', error);
-            setSelectedFile(prev => ({
-              ...prev,
-              isConverting: false
-            }));
-          }
+      // Update local state
+      setSelectedFile(prev => ({
+        ...prev,
+        hasColorPages: result.analysis.hasColoredPages,
+        colorPageCount: result.analysis.coloredPageCount,
+        totalPages: result.analysis.pageCount,
+        colorAnalysis: {
+          pageAnalysis: result.analysis.pageAnalysis
         }
-      }, 0);
+      }));
     }
   };
 
@@ -767,31 +784,44 @@ const QRUpload = () => {
                     <div className="p-3 border-b border-base-300 bg-base-100">
                       <div className="flex items-center justify-between">
                         <span className="text-sm text-gray-600">Total Pages</span>
-                        <span className="font-medium">{selectedFile.colorAnalysis?.pageAnalysis?.length || selectedFile.totalPages || 1}</span>
+                        <span className="font-medium">{selectedFile.totalPages || 1}</span>
                       </div>
                     </div>
                     
                     {/* Page Breakdown */}
-                    <div className="max-h-[300px] overflow-y-auto divide-y divide-base-300">
-                      {selectedFile.colorAnalysis?.pageAnalysis?.map((page, index) => (
-                        <div 
-                          key={index}
-                          className="flex items-center justify-between p-3 bg-base-100 hover:bg-base-200/50"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm">Page {index + 1}</span>
-                            {page.hasColor && (
-                              <span className="badge badge-sm badge-primary badge-outline">Color</span>
-                            )}
+                    {selectedFile.colorAnalysis?.pageAnalysis ? (
+                      <div className="max-h-[300px] overflow-y-auto divide-y divide-base-300">
+                        {selectedFile.colorAnalysis.pageAnalysis.map((page, index) => (
+                          <div 
+                            key={index}
+                            className="flex items-center justify-between p-3 bg-base-100 hover:bg-base-200/50"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm">Page {page.pageNumber}</span>
+                              {page.hasColor && (
+                                <span className="badge badge-sm badge-primary badge-outline">Color</span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500">
+                                {page.hasColor ? '₱12.00' : '₱10.00'}
+                              </span>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-gray-500">
-                              {page.hasColor ? '₱12.00' : '₱10.00'}
-                            </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="p-4 text-center text-gray-500">
+                        {selectedFile.isConverting ? (
+                          <div className="flex flex-col items-center gap-2">
+                            <div className="loading loading-spinner loading-sm"></div>
+                            <span className="text-sm">Analyzing document...</span>
                           </div>
-                        </div>
-                      ))}
-                    </div>
+                        ) : (
+                          <span className="text-sm">No page analysis available</span>
+                        )}
+                      </div>
+                    )}
 
                     {/* Summary Footer */}
                     <div className="p-3 border-t border-base-300 bg-base-200">
@@ -799,15 +829,13 @@ const QRUpload = () => {
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium text-gray-600">Color Pages</span>
                           <span className="badge badge-sm badge-primary">
-                            {selectedFile.colorAnalysis?.pageAnalysis?.filter(page => page.hasColor).length || 0}
+                            {selectedFile.colorPageCount || 0}
                           </span>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium text-gray-600">B&W Pages</span>
                           <span className="badge badge-sm">
-                            {selectedFile.colorAnalysis?.pageAnalysis ? 
-                              selectedFile.colorAnalysis.pageAnalysis.filter(page => !page.hasColor).length :
-                              selectedFile.totalPages || 1}
+                            {(selectedFile.totalPages || 1) - (selectedFile.colorPageCount || 0)}
                           </span>
                         </div>
                       </div>
@@ -851,6 +879,7 @@ const QRUpload = () => {
                       fileName={selectedFile.fileName}
                       className="max-h-[calc(100vh-250px)] w-auto"
                       style={{ height: 'auto', maxWidth: '100%' }}
+                      onConversionComplete={handleConversionComplete}
                     />
                   </div>
                 </div>
