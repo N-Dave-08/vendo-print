@@ -15,15 +15,40 @@ export const checkScanner = () => {
     const checkScript = `
       Write-Output "Checking scanner availability..."
       try {
-        $deviceManager = New-Object -ComObject WIA.DeviceManager
-        $scanners = @($deviceManager.DeviceInfos | Where-Object { $_.Type -eq 1 })
+        # Try multiple methods to detect scanners
+        $scannerFound = $false
         
-        if ($scanners.Count -gt 0) {
-          Write-Output "Found $($scanners.Count) scanner(s)"
-          Write-Output ($scanners | ForEach-Object { $_.Properties('Name').Value })
+        # Method 1: WIA DeviceManager (preferred)
+        try {
+          $deviceManager = New-Object -ComObject WIA.DeviceManager
+          $scanners = @($deviceManager.DeviceInfos | Where-Object { $_.Type -eq 1 })
+          if ($scanners.Count -gt 0) {
+            Write-Output "Found $($scanners.Count) scanner(s) using WIA"
+            Write-Output ($scanners | ForEach-Object { $_.Properties('Name').Value })
+            $scannerFound = $true
+          }
+        } catch {
+          Write-Output "WIA method failed, trying alternative methods..."
+        }
+        
+        # Method 2: WMI (fallback)
+        if (-not $scannerFound) {
+          try {
+            $wmiScanners = Get-WmiObject -Class Win32_ScannerDevice -ErrorAction Stop
+            if ($wmiScanners) {
+              Write-Output "Found scanner(s) using WMI"
+              Write-Output ($wmiScanners | ForEach-Object { $_.Name })
+              $scannerFound = $true
+            }
+          } catch {
+            Write-Output "WMI method failed..."
+          }
+        }
+        
+        if ($scannerFound) {
           exit 0
         } else {
-          Write-Error "No scanners found"
+          Write-Error "No scanners found using any detection method"
           exit 1
         }
       } catch {
