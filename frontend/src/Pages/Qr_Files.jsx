@@ -396,7 +396,7 @@ const QRUpload = () => {
     // Update selected file immediately with any existing analysis
     setSelectedFile({
       ...file,
-      isConverting: file.isConverting || false,
+      isConverting: false, // Reset conversion status
       convertedUrl: file.convertedUrl || null,
       totalPages: file.totalPages || 1,
       hasColorPages: file.hasColorPages || false,
@@ -404,7 +404,7 @@ const QRUpload = () => {
       colorAnalysis: file.colorAnalysis || null
     });
 
-    // If it's a DOCX file that hasn't been converted yet
+    // Only start conversion if it's a DOCX file and hasn't been converted yet
     if ((file.fileName.toLowerCase().endsWith('.docx') || file.fileName.toLowerCase().endsWith('.doc')) && 
         !file.convertedUrl && !file.isConverting) {
       try {
@@ -417,7 +417,7 @@ const QRUpload = () => {
           });
         }
 
-        // Update local state
+        // Update local state to show conversion status
         setSelectedFile(prev => ({ ...prev, isConverting: true }));
         
         // Get a fresh URL if needed
@@ -447,15 +447,16 @@ const QRUpload = () => {
               lastConverted: Date.now(),
               isConverted: true,
               status: "converted",
-              isConverting: false
+              isConverting: false // Ensure conversion status is reset
             });
           }
 
-          // Update local state with converted URL
+          // Update local state with converted URL and reset conversion status
           setSelectedFile(prev => ({
             ...prev,
             isConverting: false,
-            convertedUrl: response.data.pdfUrl
+            convertedUrl: response.data.pdfUrl,
+            status: "converted"
           }));
         }
       } catch (error) {
@@ -473,7 +474,8 @@ const QRUpload = () => {
         // Update local state
         setSelectedFile(prev => ({
           ...prev,
-          isConverting: false
+          isConverting: false,
+          status: "conversion_failed"
         }));
       }
     }
@@ -512,7 +514,7 @@ const QRUpload = () => {
     }
   };
 
-  // Update the file display component to show conversion status
+  // Update the FileItem component
   const FileItem = ({ file, onSelect, selected }) => {
     return (
       <div
@@ -531,7 +533,7 @@ const QRUpload = () => {
             <p className="text-sm font-medium text-base-content truncate">
               {file.fileName}
             </p>
-            {file.isConverting && (
+            {selected && file.isConverting && (
               <div className="flex items-center text-sm text-base-content/70">
                 <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
                 Converting to PDF...
