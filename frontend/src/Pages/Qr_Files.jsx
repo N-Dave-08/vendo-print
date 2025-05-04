@@ -14,9 +14,9 @@ import { onValue } from "firebase/database";
 import M_Qrcode from "../components/M_Qrcode";
 import DocumentPreview from "../components/common/document_preview";
 import PrintSettings from "../components/common/PrintSettings";
+import SmartPriceToggle from "../components/common/smart_price";
 import axios from "axios";
 import { loadPDF } from '../utils/pdfjs-init';
-import SmartPriceLabel from "../components/qr/smart_price";
 import { deleteFile, deleteUploadedFile } from '../utils/fileOperations';
 import { AlertCircle, RefreshCw } from "lucide-react";
 
@@ -1118,55 +1118,7 @@ const QRUpload = () => {
                         </div>
                       </div>
 
-                      {/* Color Analysis Section */}
-                      <div className="mb-8">
-                        <h5 className="text-sm font-medium text-gray-600 mb-3">Document Analysis</h5>
-                        <div className="bg-base-100 rounded-xl border border-base-200 overflow-hidden">
-                          {/* Total Pages Summary */}
-                          <div className="p-3 border-b border-base-200">
-                            <div className="flex items-center justify-between">
-                              <span className="text-sm text-gray-600">Total Pages</span>
-                              <span className="font-medium">{selectedFile.totalPages || 1}</span>
-                            </div>
-                          </div>
-                          
-                          {/* Page Breakdown */}
-                          <div className="max-h-[200px] overflow-y-auto divide-y divide-base-200">
-                            {selectedFile.colorAnalysis?.pageAnalysis?.map((page, index) => (
-                              <div 
-                                key={index}
-                                className="flex items-center justify-between p-3 hover:bg-base-200/50"
-                              >
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm">Page {index + 1}</span>
-                                  {page.hasColor && (
-                                    <span className="badge badge-sm badge-primary badge-outline">Color</span>
-                                  )}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs text-gray-500">
-                                    {page.hasColor ? '₱12.00' : '₱10.00'}
-                                  </span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-
-                          {/* Summary Footer */}
-                          <div className="p-3 border-t border-base-200 bg-base-200/30">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium text-gray-600">Color Pages</span>
-                                <span className="badge badge-sm badge-primary">{selectedFile.colorPageCount || 0}</span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium text-gray-600">B&W Pages</span>
-                                <span className="badge badge-sm">{(selectedFile.totalPages || 1) - (selectedFile.colorPageCount || 0)}</span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
+                     
 
                     </div>
 
@@ -1174,43 +1126,17 @@ const QRUpload = () => {
                     <div className="space-y-4">
                       {/* Smart Price Card */}
                       <div className="bg-blue-50 rounded-xl p-5">
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-2">
-                            <span className="text-blue-600 text-xl font-semibold">₱</span>
-                            <h5 className="font-semibold text-gray-800">Smart Price</h5>
-                          </div>
-                          <div className="text-2xl font-bold text-blue-600">₱{price.toFixed(2)}</div>
-                        </div>
-                        <div className="flex items-center gap-2 text-sm text-gray-600">
-                          <span>{isColor ? "Color" : "B&W"} printing</span>
-                          <span className="text-gray-400">•</span>
-                          <span>{copies} {copies === 1 ? "copy" : "copies"}</span>
-                          <span className="text-gray-400">•</span>
-                          <span>All {selectedFile.totalPages || 1} pages</span>
-                        </div>
-                        
-                        {/* Volume discount indicator */}
-                        {(() => {
-                          const totalPages = copies * (selectedFile.totalPages || 1);
-                          let discountRate = null;
-                          
-                          if (totalPages >= 100) discountRate = "15%";
-                          else if (totalPages >= 50) discountRate = "10%";
-                          else if (totalPages >= 20) discountRate = "5%";
-                          
-                          return discountRate && (
-                            <div className="mt-2 text-sm font-medium text-green-600 flex justify-between">
-                              <span>Volume Discount:</span>
-                              <span>{discountRate} OFF</span>
-                            </div>
-                          );
-                        })()}
-                        
-                        {/* Coins required indicator */}
-                        <div className="mt-2 text-sm font-medium text-primary flex justify-between">
-                          <span>Coins Required:</span>
-                          <span className="font-bold">{price}</span>
-                        </div>
+                        <SmartPriceToggle
+                          paperSize="Short Bond"
+                          isColor={isColor}
+                          copies={copies}
+                          totalPages={selectedFile.totalPages || 1}
+                          calculatedPrice={price}
+                          setCalculatedPrice={setPrice}
+                          selectedPageOption="All"
+                          filePreviewUrl={selectedFile.fileUrl}
+                          colorAnalysis={selectedFile.colorAnalysis}
+                        />
                       </div>
 
                       {/* Balance Card */}
