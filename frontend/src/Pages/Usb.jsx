@@ -1,15 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Printer, ArrowLeft, X, FileText } from "lucide-react";
-import MiniNav from "../components/MiniNav";
-import html2canvas from 'html2canvas';
-import { jsPDF } from 'jspdf';
-
-import CustomPage from "../components/common/customized_page";
 import DocumentPreview from "../components/common/document_preview";
-import SmartPriceToggle from "../components/common/smart_price";
-import PrinterList from "../components/usb/printerList";
-import SelectColor from "../components/usb/select_color";
 import PrintSettings from "../components/common/PrintSettings";
 import UsbDrivePanel from "../components/usb/UsbDrivePanel";
 
@@ -21,9 +13,6 @@ import axios from "axios";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import mammoth from "mammoth";
 
-import { getPageIndicesToPrint } from "../utils/pageRanges";
-import Header from "../components/headers/Header";
-import ClientContainer from "../components/containers/ClientContainer";
 import { truncatePdfToTenPages } from '../utils/pdfUtils';
 
 const Usb = () => {
