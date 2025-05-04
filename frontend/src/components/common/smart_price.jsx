@@ -49,9 +49,15 @@ const SmartPriceToggle = ({
           totalCost += cost;
         });
       } else {
-        // For black and white mode, all pages are ₱10
-        totalCost = 10 * pagesToPrint;
+        // For black and white mode, each page costs ₱10
+        if (colorAnalysis?.pageAnalysis) {
+          totalCost = colorAnalysis.pageAnalysis.length * 10;
+        } else if (pagesToPrint > 0) {
+          totalCost = pagesToPrint * 10;
+        }
       }
+
+      console.log("TOTAL COST", totalCost);
 
       // Multiply by number of copies
       totalCost *= copies;
